@@ -1,0 +1,18 @@
+[project]
+name = "nanodesu"
+version = "1.0.0"
+description = "Unpack and repack PyInstaller single-file executables (standard library only)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["pyinstaller", "unpacker", "reverse-engineering", "carchive", "pyz"]
+dependencies = []
+
+[project.scripts]
+nanodesu = "nanodesu:main"
+
+[tool.setuptools]
+py-modules = ["nanodesu"]
+
+[tool.setuptools.package-data]
+"*" = ["README.md", "LICENSE"]
