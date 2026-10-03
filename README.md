@@ -1,5 +1,7 @@
 # Nanodesu!
 
+[![tests](https://github.com/Nesarf/nanodesu/actions/workflows/tests.yml/badge.svg)](https://github.com/Nesarf/nanodesu/actions/workflows/tests.yml)
+
 Unpack and repack PyInstaller single-file executables — all the way down.
 
 Standard library only. No network access, and the target program is never
@@ -98,6 +100,23 @@ Against a 138.8 MB onefile build (PyInstaller 6.x, Python 3.12, PySide6):
   (SHA-256 identical, including the embedded PYZ archive)
 * the repacked executable **starts and runs normally**
 
+## Testing
+
+The test suite builds small synthetic archives in a temporary directory, so it
+runs in well under a second and needs no sample executable:
+
+```bash
+python -m unittest discover -s test -v
+```
+
+It covers archive parsing, the `extract` → `build` round trip, the `--pyc`
+header handling, contents-directory placement, PYZ extraction, and the error
+paths. The three format details listed under "Three details that break
+everything if changed back" each have a dedicated regression test.
+
+Continuous integration runs the suite on Linux and Windows across Python
+3.9, 3.12, 3.13 and 3.14 (see `.github/workflows/tests.yml`).
+
 ## Format notes
 
 Everything below is derived from the on-disk format itself; the table exists
@@ -141,6 +160,11 @@ because each row was a bug at some point.
   hypothesis, not as the original source.
 * Repacking a large archive is I/O bound and can take a few minutes on a
   mechanical disk.
+* A module and a package can claim the same path inside a PYZ archive (for
+  example `utils` and `utils.sub`). The extractor detects that and writes the
+  later one under a flattened name rather than overwriting it.
+* Non-archive input, missing paths and directories all fail with a one-line
+  message and exit status 1; Python tracebacks are not shown to the CLI user.
 
 ## Tools
 

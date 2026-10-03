@@ -160,6 +160,10 @@ def _inflate(data: bytes) -> bytes:
 
 def find_archive(path) -> Archive:
     path = Path(path)
+    if not path.exists():
+        raise SystemExit("no such file: %s" % path)
+    if path.is_dir():
+        raise SystemExit("that is a directory, not an archive: %s" % path)
     size = path.stat().st_size
     with open(path, "rb") as f:
         f.seek(max(0, size - 8192))
@@ -598,6 +602,8 @@ def cmd_pyz(target: str, args) -> int:
     out.mkdir(parents=True, exist_ok=True)
     ok = nspkg = bad = 0
     names = []
+    taken: dict = {}          # relative output path -> module name that claimed it
+    collided: list = []
     for item in toc:
         if not isinstance(item, (tuple, list)) or len(item) != 2:
             continue
@@ -618,13 +624,28 @@ def cmd_pyz(target: str, args) -> int:
         except zlib.error:
             bad += 1
             continue
-        dest = out / (name.replace(".", "/") + ".pyc")
+        rel = name.replace(".", "/") + ".pyc"
+        # Distinct dotted modules can map onto the same file path when a module and
+        # a package share a name (e.g. 'utils' as a module and 'utils.sub' as a
+        # package). Never let one silently overwrite the other: fall back to a
+        # flattened name and report it.
+        if rel in taken and taken[rel] != name:
+            flat = name.replace(".", "_") + ".pyc"
+            collided.append((name, taken[rel], flat))
+            rel = flat
+        taken[rel] = name
+        dest = out / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(code)          # bare marshalled code object, as stored
         ok += 1
     print("extracted bytecode for %d modules -> %s" % (ok, out))
     print("  %d namespace packages (no code object, expected), %d failed"
           % (nspkg, bad))
+    if collided:
+        print("  %d module path collision(s), written with a flattened name instead:"
+              % len(collided))
+        for name, other, flat in collided[:10]:
+            print("    %s (would have overwritten %s) -> %s" % (name, other, flat))
     print("  note: these are bare marshalled code objects without a .pyc header;")
     if args.list:
         for name in sorted(names)[:args.list]:
