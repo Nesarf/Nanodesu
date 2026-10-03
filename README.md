@@ -7,6 +7,9 @@ Unpack and repack PyInstaller single-file executables — all the way down.
 Standard library only. No network access, and the target program is never
 executed. The name is a fan catchphrase; it carries no technical meaning.
 
+**New here?** → [`QUICKSTART.md`](QUICKSTART.md) opens with the situation this tool is for
+and three commands you can run right now.
+
 ---
 
 ## What it does
