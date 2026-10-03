@@ -1,6 +1,6 @@
 # Nanodesu!
 
-[![tests](https://github.com/Nesarf/nanodesu/actions/workflows/tests.yml/badge.svg)](https://github.com/Nesarf/nanodesu/actions/workflows/tests.yml)
+[![tests](https://github.com/Nesarf/Nanodesu/actions/workflows/tests.yml/badge.svg)](https://github.com/Nesarf/Nanodesu/actions/workflows/tests.yml)
 
 Unpack and repack PyInstaller single-file executables — all the way down.
 
