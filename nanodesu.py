@@ -54,6 +54,7 @@ import io
 import json
 import marshal
 import os
+import re
 import shutil
 import struct
 import sys
@@ -332,6 +333,51 @@ def flat_name(e: Entry) -> str:
     return "%s__%s" % (e.tname.replace("(", "_").replace(")", ""), safe)
 
 
+def confining(
+    out_root: Path,
+    rel: Path,
+    original_name: str,
+    *,
+    strip_drive: bool = False,
+) -> Path:
+    """Clamp an entry name so it cannot be written outside out_root.
+
+    Entry names come from the archive, so they are untrusted input, and a name like
+    '../../OUTSIDE/x' would otherwise write wherever the user has permission -- confirmed by
+    test before this was added. An archive is a data structure someone else built; a tool
+    whose whole purpose is to open untrusted files must not let that structure address the
+    filesystem.
+
+    Colons go too, not just separators: 'C:/Windows/x' reduces to the relative path
+    'C:Windows/x', and on Windows a drive-relative path escapes out_root when joined to it.
+    That was the second escape found by testing, after '..' was handled.
+
+    The entry is repaired rather than dropped. Dropping would be silent data loss, which is
+    worse than useless in an evidence tool, and it would break the round trip. Repairing
+    keeps extraction faithful and repacking byte-exact; the caller records what changed.
+    """
+    parts = []
+    for piece in rel.parts:
+        if piece in ("", ".", ".."):
+            continue
+        piece = re.sub(r'[\\/:*?"<>|]', "_", piece)
+        piece = piece.strip(" .")
+        if piece:
+            parts.append(piece)
+    clamped = Path(*parts) if parts else Path("_unnamed")
+    return clamped
+
+
+def inside(root: Path, candidate: Path) -> bool:
+    """True when candidate really resolves inside root, as a belt to the clamp's braces."""
+    try:
+        root_r = root.resolve()
+        cand_r = (root / candidate).resolve()
+    except OSError:
+        return False
+    return cand_r == root_r or root_r in cand_r.parents
+
+
 def human(n: float) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(n) < 1024 or unit == "TB":
@@ -478,6 +524,7 @@ def cmd_extract(ar: Archive, args) -> int:
                 break
     ok = fail = 0
     manifest = []
+    confined = []
     total = len(ar.toc)
     for i, e in enumerate(ar.toc, 1):
         try:
@@ -496,11 +543,19 @@ def cmd_extract(ar: Archive, args) -> int:
         wrapped = 0
         if args.pyc and e.tcode in (TC_MODULE, TC_MODULE_DEP, TC_SOURCE):
             wrapped = PYC_HEADER_LEN
+        # The name is untrusted, so the path is clamped before it is written, and the
+        # repair is recorded: 'rel' keeps the original shape for an exact repack, while
+        # 'safe_rel' is where the bytes actually go.
+        safe_rel = confining(out_root, rel, e.name)
+        if safe_rel.as_posix() != rel.as_posix() or not inside(out_root, safe_rel):
+            confined.append((e.name, safe_rel.as_posix()))
         manifest.append({
             "name": e.name, "tcode": e.tcode, "cmprs": e.cmprs,
-            "usize": e.usize, "rel": rel.as_posix(), "pyc_header": wrapped,
+            "usize": e.usize, "rel": rel.as_posix(), "safe_rel": safe_rel.as_posix(),
+            "confined": safe_rel.as_posix() != rel.as_posix(),
+            "pyc_header": wrapped,
         })
-        dest = out_root / rel
+        dest = out_root / safe_rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(blob)
         ok += 1
@@ -547,6 +602,13 @@ def cmd_extract(ar: Archive, args) -> int:
     (out_root / "_archive_manifest.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     print("\nextracted %d files (%d failed) -> %s" % (ok, fail, out_root))
+    if confined:
+        # Said out loud, not folded away: an archive that tried to address files outside the
+        # output directory is a finding about the archive, not an inconvenience.
+        print("  ! %d entry name(s) tried to leave the output directory and were confined:"
+              % len(confined))
+        for original, placed in confined[:10]:
+            print("      %r -> %s" % (original, placed))
     print("bootloader stub saved as %s (%s)" % (stub_path, human(len(stub))))
     print("manifest written to _archive_manifest.json (used by 'build')")
     return 0 if fail == 0 else 2

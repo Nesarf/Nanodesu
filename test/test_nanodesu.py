@@ -12,6 +12,7 @@ that silently produce a broken repack are at the bottom.
 from __future__ import annotations
 
 import importlib.util
+import json
 import struct
 import sys
 import tempfile
@@ -174,6 +175,61 @@ class TestRepack(unittest.TestCase):
         for ea, eb in zip(a.toc, b.toc):
             self.assertEqual(nano.read_entry(a, ea), nano.read_entry(b, eb),
                              "payload differs for %s" % ea.name)
+
+    def test_entry_names_cannot_escape_the_output_directory(self):
+        """A crafted archive must not be able to write outside the directory it was given.
+
+        Entry names come from the archive, which is untrusted by definition. Before this was
+        clamped, an entry named '../../OUTSIDE/x' wrote outside the output tree -- confirmed
+        by running the attack, not by reading the code.
+        """
+        vectors = [
+            "../../OUTSIDE/pwned.txt",
+            "../../../escaped.txt",
+            "/etc/pwned.txt",
+            "C:/Windows/pwned.txt",
+            r"..\..\pwned.txt",
+            "a/./../../b/pwned.txt",
+            r"\server\share\pwned.txt",
+            "..",
+            "a/b/../../../../deep.txt",
+        ]
+        for name in vectors:
+            with self.subTest(name):
+                work = Path(self.tmp.name) / ("case_%d" % (abs(hash(name)) % 10 ** 6))
+                work.mkdir(parents=True, exist_ok=True)
+                out = work / "tree"
+                src = make_archive(work / "evil.exe", [(name, "s", b"payload", 0)])
+                rc = nano.main(["extract", str(src), "-o", str(out)])
+                self.assertEqual(rc, 0)
+                escaped = [p for p in work.rglob("*")
+                           if p.is_file() and p.name != "evil.exe"
+                           and "tree" not in p.relative_to(work).parts]
+                self.assertEqual(escaped, [],
+                                 "entry %r escaped the output directory: %s" % (name, escaped))
+
+    def test_confined_entries_are_reported_and_manifested(self):
+        """The repair is recorded, not silent: an archive that tried this is a finding."""
+        out = Path(self.tmp.name) / "confined"
+        src = make_archive(Path(self.tmp.name) / "evil2.exe",
+                           [("../../OUTSIDE/pwned.txt", "s", b"payload", 0)])
+        rc = nano.main(["extract", str(src), "-o", str(out)])
+        self.assertEqual(rc, 0)
+        manifest = json.loads((out / "_archive_manifest.json").read_text(encoding="utf-8"))
+        entry = manifest["entries"][0]
+        self.assertTrue(entry["confined"])
+        self.assertEqual(entry["name"], "../../OUTSIDE/pwned.txt")   # kept for an exact repack
+        self.assertNotIn("..", entry["safe_rel"])
+
+    def test_ordinary_names_are_untouched(self):
+        """The clamp must not rewrite benign paths, or the round trip breaks."""
+        out = Path(self.tmp.name) / "normal"
+        src = make_archive(Path(self.tmp.name) / "ok.exe", SAMPLE)
+        nano.main(["extract", str(src), "-o", str(out)])
+        manifest = json.loads((out / "_archive_manifest.json").read_text(encoding="utf-8"))
+        self.assertTrue(all(not e["confined"] for e in manifest["entries"]))
+        for e in manifest["entries"]:
+            self.assertEqual(e["rel"], e["safe_rel"])
 
     def test_build_without_manifest_still_writes_a_readable_archive(self):
         """Falls back to inferring entries from the directory."""
