@@ -636,7 +636,13 @@ def cmd_pyz(target: str, args) -> int:
         taken[rel] = name
         dest = out / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(code)          # bare marshalled code object, as stored
+        # The PYZ header already carries the bytecode magic, so a valid .pyc can be written
+        # without guessing. Default to that and keep the raw form behind --bare, so both
+        # "feed it to a decompiler" and "give me the stored bytes" are one flag apart.
+        if args.bare or not pyc_magic:
+            dest.write_bytes(code)
+        else:
+            dest.write_bytes(wrap_pyc(code, pyc_magic))
         ok += 1
     print("extracted bytecode for %d modules -> %s" % (ok, out))
     print("  %d namespace packages (no code object, expected), %d failed"
@@ -646,7 +652,11 @@ def cmd_pyz(target: str, args) -> int:
               % len(collided))
         for name, other, flat in collided[:10]:
             print("    %s (would have overwritten %s) -> %s" % (name, other, flat))
-    print("  note: these are bare marshalled code objects without a .pyc header;")
+    if args.bare or not pyc_magic:
+        print("  note: raw marshalled code objects, without a .pyc header (--bare)")
+    else:
+        print("  each file carries a valid .pyc header derived from the PYZ bytecode magic;")
+        print("  use --bare to keep the stored bytes untouched")
     if args.list:
         for name in sorted(names)[:args.list]:
             print("   ", name)
@@ -842,6 +852,8 @@ def build_parser():
     p.add_argument("-o", "--output")
     p.add_argument("--list", type=int, default=0,
                    help="also list the first N module names")
+    p.add_argument("--bare", action="store_true",
+                   help="write the stored bytes untouched instead of adding a .pyc header")
 
     p = sub.add_parser("build", help="repack an extracted directory"); common(p)
     p.add_argument("-o", "--output", required=True)

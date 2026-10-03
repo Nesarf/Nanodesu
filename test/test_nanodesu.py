@@ -266,6 +266,23 @@ class TestPyz(unittest.TestCase):
         self.assertTrue((out / "pkg.pyc").is_file())
         self.assertFalse((out / "ns.pyc").exists())
 
+    def test_pyz_output_is_a_valid_pyc_by_default(self):
+        """The PYZ header carries the bytecode magic, so no guessing is needed."""
+        p = self.dir / "PYZ.pyz"
+        p.write_bytes(self._pyz([("mod", 0, bytes([0xe3]) + b"code")]))
+        out = self.dir / "with_header"
+        nano.main(["pyz", str(p), "-o", str(out)])
+        data = (out / "mod.pyc").read_bytes()
+        self.assertEqual(data[:4], bytes.fromhex("cb0d0d0a"), "a .pyc header was expected")
+        self.assertEqual(data[nano.PYC_HEADER_LEN:], bytes([0xe3]) + b"code")
+
+    def test_pyz_bare_keeps_the_stored_bytes(self):
+        p = self.dir / "PYZ.pyz"
+        p.write_bytes(self._pyz([("mod", 0, bytes([0xe3]) + b"code")]))
+        out = self.dir / "bare"
+        nano.main(["pyz", str(p), "-o", str(out), "--bare"])
+        self.assertEqual((out / "mod.pyc").read_bytes(), bytes([0xe3]) + b"code")
+
     def test_path_collision_falls_back_instead_of_overwriting(self):
         """A module and a package can claim the same file path; never overwrite."""
         p = self.dir / "PYZ.pyz"
@@ -274,8 +291,10 @@ class TestPyz(unittest.TestCase):
         nano.main(["pyz", str(p), "-o", str(out)])
         files = sorted(f.relative_to(out).as_posix() for f in out.rglob("*.pyc"))
         self.assertEqual(len(files), 2, "one module was overwritten: %s" % files)
-        bodies = {f: (out / f).read_bytes() for f in files}
-        self.assertEqual(set(bodies.values()), {b"\xe3module", b"\xe3sub"})
+        # Compare the payload only: a .pyc header is prepended, expected and
+        # identical for both files.
+        bodies = {(out / f).read_bytes()[nano.PYC_HEADER_LEN:] for f in files}
+        self.assertEqual(bodies, {bytes([0xe3]) + b"module", bytes([0xe3]) + b"sub"})
 
 
 # --------------------------------------------------------------------------- #

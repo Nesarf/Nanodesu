@@ -61,6 +61,7 @@ python nanodesu.py extract path/to/app.exe -o out/app --pyc
 python nanodesu.py verify  path/to/app.exe
 
 # unpack the PYZ archive inside it (if the build has one)
+# modules come out as valid .pyc files; --bare keeps the stored bytes untouched
 python nanodesu.py pyz     out/app/PYZ.pyz -o out/app/_pyz_modules
 
 # put it back together
@@ -75,8 +76,9 @@ manifest it falls back to inferring everything from the directory.
 ### The `--pyc` flag
 
 Archives store python modules as bare marshalled code objects, with no `.pyc`
-header. `--pyc` prepends a valid header so decompilers and other tooling accept
-them directly. The number of prepended bytes is recorded in the manifest, and
+header. `extract --pyc` prepends a valid header so decompilers and other tooling
+accept them directly; the same applies to `pyz`, which derives the header from
+the PYZ archive's own bytecode magic. The number of prepended bytes is recorded in the manifest, and
 `build` strips exactly that many again — so the same extracted tree both feeds
 decompilers and repacks cleanly.
 
@@ -132,7 +134,7 @@ because each row was a bug at some point.
 | compression | flag `0` = stored, `1` = zlib over the whole blob |
 | type codes | `b` binary, `x` dependency, `m` module, `s` source, `z` **PYZ archive**, `Z` plain zipfile, `o` option, `d` data, `n` symlink |
 | option entries | value lives in the name, payload length is zero, e.g. `pyi-contents-directory _internal` |
-| module payloads | bare `marshal` code objects, no `.pyc` header |
+| module payloads | bare `marshal` code objects; `extract --pyc` and `pyz` add a valid `.pyc` header |
 | PYZ archive | `PYZ\0` + 4-byte bytecode magic + `int32` TOC offset + 5 reserved bytes; TOC is a marshalled list; item types `0` module, `1` package, `2` legacy data, `3` namespace package |
 | repacking | `pkg_len = len(PKG body) + 88`; `toc_off = 88 + payload length`; entry offsets are relative to the PKG start |
 
@@ -163,6 +165,8 @@ because each row was a bug at some point.
 * A module and a package can claim the same path inside a PYZ archive (for
   example `utils` and `utils.sub`). The extractor detects that and writes the
   later one under a flattened name rather than overwriting it.
+* `pyz` writes valid `.pyc` files (the header is derived from the PYZ bytecode
+  magic, so nothing is guessed). Use `--bare` for the untouched stored bytes.
 * Non-archive input, missing paths and directories all fail with a one-line
   message and exit status 1; Python tracebacks are not shown to the CLI user.
 
