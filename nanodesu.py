@@ -82,9 +82,9 @@ TC_PYZ = "z"             # PYZ archive - LOWERCASE z; uppercase Z is a plain zip
 TC_ZIPFILE = "Z"
 TC_RUNTIME = "R"
 TC_OPTION = "o"
-# NOTE: a PYZ archive uses LOWERCASE 'z'; uppercase 'Z' is a plain zipfile entry.
-# Missing the lowercase 'z' once caused the TOC walk to stop before its last entry,
-# so repacked archives had no PYZ and refused to start. Keep both characters.
+# A PYZ archive uses LOWERCASE 'z'; uppercase 'Z' is a plain zipfile entry. Both are
+# required in the accepted set: omitting lowercase 'z' stops the TOC walk before its last
+# entry, leaving the repacked archive without a PYZ and unable to start.
 VALID_TYPES = set("bxdsmMZRzon")
 
 TYPE_NAMES = {
@@ -612,8 +612,8 @@ def cmd_pyz(target: str, args) -> int:
             continue
         # PYZ item types: 0=module, 1=package (__init__), 2=legacy data (unused),
         #                 3=implicit namespace package (no code object).
-        # Beware: 0 is an ordinary module and must NOT be skipped - treating it as
-        # a namespace package once reduced the output to package __init__ files only.
+        # Type 0 is an ordinary module and must not be skipped: treating it as a
+        # namespace package reduces the output to package __init__ files only.
         typ, off, ln = meta
         names.append(name)
         if not ln or typ == 3:

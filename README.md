@@ -5,7 +5,7 @@
 Unpack and repack PyInstaller single-file executables — all the way down.
 
 Standard library only. No network access, and the target program is never
-executed. The name comes from the author's catchphrase.
+executed. The name is a fan catchphrase; it carries no technical meaning.
 
 ---
 
@@ -131,8 +131,9 @@ Continuous integration runs the suite on Linux and Windows across Python
 
 ## Format notes
 
-Everything below is derived from the on-disk format itself; the table exists
-because each row was a bug at some point.
+The format below was derived from the on-disk layout. The repacking rules are the
+constraints that make the write path correct: each one corresponds to a way a repack
+fails, so none of them is optional.
 
 | Item | Detail |
 |---|---|
@@ -151,8 +152,8 @@ because each row was a bug at some point.
 ### Three details that break everything if changed back
 
 1. **A PYZ archive uses lowercase `z`.** Uppercase `Z` is a plain zipfile entry.
-   If the parser does not accept lowercase `z`, the table walk stops before its
-   final entry, the repacked executable ends up without its PYZ archive, and it
+   The parser must accept lowercase `z`. If it does not, the table walk stops
+   before its final entry; the repacked executable then has no PYZ archive and
    refuses to start with `PYZ archive entry not found in the TOC!`.
 2. **PYZ item type `0` is an ordinary module.** Type `3` is the namespace
    package with no code object. Skipping type `0` as if it were a namespace
@@ -170,8 +171,8 @@ because each row was a bug at some point.
   interpreter version that produced them. `--pyc` produces valid input for
   decompilers, but the output of any decompiler should be treated as a
   hypothesis, not as the original source.
-* Repacking a large archive is I/O bound and can take a few minutes on a
-  mechanical disk.
+* Repacking a large archive is I/O bound and can take a few minutes on slow
+  storage.
 * A module and a package can claim the same path inside a PYZ archive (for
   example `utils` and `utils.sub`). The extractor detects that and writes the
   later one under a flattened name rather than overwriting it.
