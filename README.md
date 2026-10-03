@@ -73,6 +73,16 @@ that manifest, which is what makes the repack faithful: original names, original
 type codes, original compression flags and the original entry order. Without a
 manifest it falls back to inferring everything from the directory.
 
+`build` takes two optional switches, both recovered automatically when omitted:
+
+| Switch | Meaning | Default |
+|---|---|---|
+| `--pylib NAME` | value written into the cookie's python library field | the `python3*.dll` found in the tree |
+| `--pyver N` | python version, as `major*100 + minor` (312 for 3.12) | parsed from that library name |
+
+Both are recorded in the manifest, so repacking an `extract` output needs no
+flags at all.
+
 ### The `--pyc` flag
 
 Archives store python modules as bare marshalled code objects, with no `.pyc`
