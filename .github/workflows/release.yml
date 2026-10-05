@@ -106,6 +106,9 @@ jobs:
   executable:
     name: build the standalone executable
     runs-on: windows-latest
+    # Without this the upload races the release creation: the two jobs are independent, GitHub runs
+    # them concurrently, and `gh release upload` against a release that does not exist yet fails.
+    needs: release-notes
     permissions:
       contents: write       # to attach the asset to the release
     steps:
@@ -152,3 +155,35 @@ jobs:
           signature matters for your use, build from source or use the PyPI package.
           "@ | Out-File -Append -Encoding utf8 body.md
           gh release edit "$env:GITHUB_REF_NAME" --notes-file body.md
+
+  # --------------------------------------------------------------------------------------- #
+  # GitHub Release: created from the notes committed for this version.
+  # --------------------------------------------------------------------------------------- #
+  release-notes:
+    name: create the GitHub release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Create the release with the notes committed for this version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="RELEASE_NOTES_${version}.md"
+          if [ ! -f "$notes" ]; then
+            echo "::error::$notes is not in the tree; a release without notes is one nobody can review later"
+            exit 1
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::notice::release $GITHUB_REF_NAME already exists; leaving it alone"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "Nanodesu! ${version}" \
+              --notes-file "$notes" \
+              --verify-tag
+          fi
