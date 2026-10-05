@@ -27,6 +27,8 @@ jobs:
   pypi:
     name: build and publish to PyPI
     runs-on: ubuntu-latest
+    env:
+      PYPI_NAME: nanodesu
     environment:
       name: pypi
       url: https://pypi.org/p/nanodesu
@@ -64,12 +66,39 @@ jobs:
         # module it needed, and every check passed. Printing the file list costs nothing.
         run: python -c "import glob,zipfile;[print(n) for w in glob.glob('dist/*.whl') for n in zipfile.ZipFile(w).namelist()]"
 
+      - name: Is this version already on PyPI?
+        # PyPI refuses to overwrite a published file, which is correct of it and is what makes a
+        # release trustworthy. The consequence for CI is that re-running this workflow for an
+        # already-published version used to fail at the last step -- a red X on a finished release,
+        # which teaches people to ignore red Xs. So the upload is skipped with an explanation
+        # instead, and the job reports success because the end state is the one it wanted.
+        id: exists
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/${PYPI_NAME}/${version}/json")
+          if [ "$code" = "200" ]; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${PYPI_NAME} ${version} is already published; skipping the upload"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+            echo "${PYPI_NAME} ${version} is not published yet (HTTP $code)"
+          fi
+
       - name: Publish to PyPI
+        if: steps.exists.outputs.already == 'false'
         uses: pypa/gh-action-pypi-publish@67339c736fd9354cd4f8cb0b744f2b82a74b5c70  # release/v1
         with:
           # Nothing to configure: the action finds the OIDC token in the environment and PyPI
           # matches it against the publisher registered for this repository and workflow.
           packages-dir: dist/
+
+      - name: Report the outcome
+        run: |
+          if [ "${{ steps.exists.outputs.already }}" = "true" ]; then
+            echo "::notice::this run published nothing: the version was already on PyPI"
+          else
+            echo "published ${PYPI_NAME} ${GITHUB_REF_NAME#v} to PyPI"
+          fi
 
   # --------------------------------------------------------------------------------------- #
   # GitHub Release: the standalone Windows executable, unsigned.
