@@ -106,6 +106,11 @@ the PYZ archive's own bytecode magic. The number of prepended bytes is recorded 
 `build` strips exactly that many again — so the same extracted tree both feeds
 decompilers and repacks cleanly.
 
+**Getting source back out is a separate problem, and on a modern build a harder one than it
+appears.** Measured here against a Python 3.12 build, `pycdc` refuses the extracted modules
+outright, and `uncompyle6`/`decompyle3` support nothing past 3.8. See
+[DECOMPILING.md](DECOMPILING.md) — including what does still work.
+
 To find the exact bytecode magic for a target version, the tool looks for a
 matching interpreter on `PATH` or in a few common locations, then falls back to
 a built-in table. Point it somewhere specific with:
