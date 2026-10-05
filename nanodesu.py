@@ -52,6 +52,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import boundary
+import boundary_voice
 
 import argparse
 import io
@@ -89,7 +90,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.6.2"
+_SOURCE_VERSION = "1.7.0"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -328,6 +329,11 @@ def find_archive(path) -> Archive:
         # Say why. "could not parse" on its own is the least useful thing to tell somebody who
         # pointed this at an unknown file, and the specific reason is already known here.
         detail = ("\n  - " + "\n  - ".join(integrity[:5])) if integrity else ""
+        # This is the one path where the tool genuinely does not know what it is looking at, and it
+        # was the one path that said nothing: a structurally broken archive fails here and exits
+        # before any command runs. It is also the character's own rule -- refusing to guess is the
+        # honest answer rather than a failure -- so this is where she belongs most, not least.
+        boundary_voice.emit_refusal("table of contents", say=say, plain=is_plain())
         raise SystemExit("could not parse the table of contents (toc_off=%#x, toc_len=%d)%s"
                          % (toc_off, toc_size, detail))
 
@@ -524,6 +530,7 @@ def cmd_info(ar: Archive, args) -> int:
     print()
     print("boundary")
     print(boundary.format_boundary())
+    boundary_voice.emit(ar, mode="info", say=say, plain=is_plain())
     return 0
 
 
@@ -736,6 +743,7 @@ def cmd_extract(ar: Archive, args) -> int:
             print("      %s" % note)
     print("bootloader stub saved as %s (%s)" % (stub_path, human(len(stub))))
     print("manifest written to _archive_manifest.json (used by 'build')")
+    boundary_voice.emit(ar, mode="extract", say=say, plain=is_plain())
     return 0 if fail == 0 else 2
 
 
@@ -1313,7 +1321,7 @@ PROSE = {
     "cannot_tell": (
         "\u5206\u304b\u3089\u306a\u3044\u306e\u3067\u3059\u3002"
         "\u5206\u304b\u3089\u306a\u3044\u3068\u8a00\u3046\u306e\u304c"
-        "\u8aa0\u5b9e\u306a\u306e\u3067\u3059\u3002",
+        "\u8aa0\u5b9f\u306a\u306e\u3067\u3059\u3002",
         "cannot determine",
     ),
     # Plain fallbacks for the adult register's keys. They must exist here: `say` returns the key

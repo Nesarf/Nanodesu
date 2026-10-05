@@ -156,22 +156,31 @@ class TestMachineReadableOutputStaysCold(unittest.TestCase):
             self.assertNotIn("manifest", context.lower(),
                              "say() is reachable from manifest writing at line %d" % (i + 1))
 
-    def test_the_extract_path_cannot_reach_the_voice(self):
-        """The manifest is read back by `build`, so it is machine input whatever it looks like.
+    def test_the_manifest_writer_cannot_reach_the_voice(self):
+        """The invariant that actually matters, and it is narrower than it first looked.
 
-        Checked structurally rather than by running an extraction on a synthetic archive. The
-        end-to-end version of this test was attempted and spent several rounds on the archive
-        fixture instead of on the thing under test -- the third fixture in this project to do that
-        -- and the invariant is fully visible without it: `cmd_extract` and everything it calls must
-        not be able to reach `say` or the register flag at all.
+        An earlier version of this test asserted that nothing reachable from `cmd_extract` mentions
+        the voice, on the reasoning that extraction writes a manifest. **That premise was wrong**:
+        `cmd_extract` is a human-facing command that writes the manifest as a side effect, so the
+        voice belongs in it. What must never reach the voice is the code that *serialises* the
+        machine-readable output -- the manifest writer, and anything else a program reads back.
+
+        Checking the transitively reachable set from `cmd_extract` was also self-defeating: it grows
+        every time a human-facing line is added, so it fails for the wrong reason.
         """
         import ast
 
-        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+        src = SOURCE.read_text(encoding="utf-8")
+        tree = ast.parse(src)
         funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
 
-        # Everything cmd_extract can call, transitively.
-        reachable, stack = set(), ["cmd_extract"]
+        # The writers, and everything they call. These are the ones a program consumes.
+        roots = [name for name in funcs
+                 if name in ("cmd_build",) or "manifest" in name.lower()
+                 or "write_" in name]
+        self.assertTrue(roots, "no writer functions found to check")
+
+        reachable, stack = set(), list(roots)
         while stack:
             name = stack.pop()
             if name in reachable or name not in funcs:
@@ -185,10 +194,20 @@ class TestMachineReadableOutputStaysCold(unittest.TestCase):
             for node in ast.walk(funcs[name]):
                 if isinstance(node, ast.Name):
                     with self.subTest(func=name, symbol=node.id):
-                        self.assertNotIn(node.id, ("say", "is_plain", "epilog_for"),
-                                         "%s calls %s, so the voice is reachable from extraction"
-                                         % (name, node.id))
+                        self.assertNotIn(node.id, ("say", "is_plain", "emit", "emit_refusal",
+                                                   "boundary_voice"),
+                                         "%s can reach %s, so the voice is reachable from output a "
+                                         "program reads back" % (name, node.id))
 
+    def test_the_report_to_a_person_does_carry_it(self):
+        """The other direction, so the narrowed test above cannot pass by the voice being gone."""
+        src = SOURCE.read_text(encoding="utf-8")
+        for fn in ("cmd_info", "cmd_extract"):
+            start = src.index("def %s(" % fn)
+            body = src[start:src.index("\ndef ", start + 1)]
+            with self.subTest(func=fn):
+                self.assertIn("boundary_voice.emit", body,
+                              "%s is a human-facing command and should speak" % fn)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
