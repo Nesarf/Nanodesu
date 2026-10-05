@@ -85,7 +85,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.3.1"
+_SOURCE_VERSION = "1.3.2"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -99,26 +99,33 @@ PYC_HEADER_LEN = 16          # 3.7+ .pyc header: magic(4)+flags(4)+mtime(4)+size
 PYZ_MAGIC = b"PYZ\0"
 NULB = b"\x00"
 
-TC_BINARY = "b"
-TC_BINARY_DEP = "x"
-TC_BINARY_EMBED = "z"
-TC_DATA = "d"
-TC_SOURCE = "s"
-TC_MODULE = "m"
-TC_MODULE_DEP = "M"
-TC_PYZ = "z"             # PYZ archive - LOWERCASE z; uppercase Z is a plain zipfile
-TC_ZIPFILE = "Z"
-TC_RUNTIME = "R"
-TC_OPTION = "o"
+# These names follow PyInstaller's own header (bootloader/src/pyi_archive.h, `ARCHIVE_ITEM_*`).
+# Three of them used to disagree with it -- "x" was called a binary dependency, "z" a binary embed,
+# and "d" data -- while the values were right, so the code worked and only the reading of it was
+# wrong. `R` had no counterpart in any version at all.
+TC_BINARY = "b"          # ARCHIVE_ITEM_BINARY
+TC_DEPENDENCY = "d"      # ARCHIVE_ITEM_DEPENDENCY
+TC_PYZ = "z"             # ARCHIVE_ITEM_PYZ -- LOWERCASE z; uppercase Z is a plain zipfile
+TC_ZIPFILE = "Z"         # ARCHIVE_ITEM_ZIPFILE
+TC_PACKAGE = "M"         # ARCHIVE_ITEM_PYPACKAGE (a package's __init__)
+TC_MODULE = "m"          # ARCHIVE_ITEM_PYMODULE
+TC_SOURCE = "s"          # ARCHIVE_ITEM_PYSOURCE
+TC_DATA = "x"            # ARCHIVE_ITEM_DATA
+TC_OPTION = "o"          # ARCHIVE_ITEM_RUNTIME_OPTION
+TC_SPLASH = "l"          # ARCHIVE_ITEM_SPLASH -- since 4.10
+TC_SYMLINK = "n"         # ARCHIVE_ITEM_SYMLINK -- since 6.0
 # A PYZ archive uses LOWERCASE 'z'; uppercase 'Z' is a plain zipfile entry. Both are
 # required in the accepted set: omitting lowercase 'z' stops the TOC walk before its last
 # entry, leaving the repacked archive without a PYZ and unable to start.
-VALID_TYPES = set("bxdsmMZRzon")
+# Every code PyInstaller defines, across every version, and no invented ones. `l` was
+# missing, so an archive carrying a splash screen failed to parse with a message about
+# an unsupported type code. A code that is real must never stop the table walk.
+VALID_TYPES = set("bdzZMmsxonl")
 
 TYPE_NAMES = {
-    TC_BINARY: "binary", TC_BINARY_DEP: "binary(dep)", TC_DATA: "data",
-    TC_SOURCE: "source", TC_MODULE: "module", TC_MODULE_DEP: "module(dep)",
-    TC_PYZ: "pyz", TC_ZIPFILE: "zipfile", TC_RUNTIME: "runtime-hook",
+    TC_BINARY: "binary", TC_DATA: "binary(dep)", TC_DATA: "data",
+    TC_SOURCE: "source", TC_MODULE: "module", TC_PACKAGE: "module(dep)",
+    TC_PYZ: "pyz", TC_ZIPFILE: "zipfile", TC_OPTION: "runtime-hook",
     TC_OPTION: "option", "n": "symlink",
     "Z": "zipfile", "n": "symlink",
 }
@@ -431,7 +438,7 @@ def layout_path(e: Entry, internal_dir: str = "_internal") -> Path:
     """
     name = e.name.replace("\\", "/").lstrip("/")
     # Bootstrap modules, sources and the PYZ are looked up at the archive root.
-    if e.tcode in (TC_SOURCE, TC_MODULE, TC_MODULE_DEP, TC_PYZ):
+    if e.tcode in (TC_SOURCE, TC_MODULE, TC_PACKAGE, TC_PYZ):
         return Path(name)
     return Path(internal_dir) / name
 
@@ -641,7 +648,7 @@ def cmd_extract(ar: Archive, args) -> int:
     # claimed 16 bytes had been added -- so a later repack stripped 16 bytes that were never
     # there and corrupted the entry. One pass cannot disagree with itself.
     pyc_magic = pyc_magic_for(ar) if args.pyc else None
-    magic_states = (TC_MODULE, TC_MODULE_DEP, TC_SOURCE)
+    magic_states = (TC_MODULE, TC_PACKAGE, TC_SOURCE)
     if args.pyc and pyc_magic is None:
         print("  ! no .pyc magic available for Python %s, skipping headers"
               % ar.pyver_str(), file=sys.stderr)
@@ -654,7 +661,7 @@ def cmd_extract(ar: Archive, args) -> int:
             fail += 1
             continue
         rel = layout_path(e, internal_dir) if args.layout else Path(flat_name(e))
-        if args.pyc_suffix and e.tcode in (TC_MODULE, TC_MODULE_DEP, TC_SOURCE):
+        if args.pyc_suffix and e.tcode in (TC_MODULE, TC_PACKAGE, TC_SOURCE):
             if not rel.name.endswith(".pyc"):
                 rel = rel.with_name(rel.name + ".pyc")
         # Remember how many .pyc header bytes were prepended, so the repacker can
@@ -928,7 +935,7 @@ def cmd_build(root: str, args) -> int:
         def guess_tcode(rel):
             base_name = rel.rsplit("/", 1)[-1]
             if "/" in rel or base_name.endswith((".pyd", ".dll")):
-                return TC_BINARY_DEP
+                return TC_DATA
             return TC_BINARY
 
         for fp in sorted(root.rglob("*")):
@@ -1145,7 +1152,7 @@ def extract(target, out_dir, *, pyc=True, pyc_suffix=True, layout=False,
         internal_dir = found or internal_dir
 
     magic = pyc_magic_for(ar) if pyc else None
-    magic_states = (TC_MODULE, TC_MODULE_DEP, TC_SOURCE)
+    magic_states = (TC_MODULE, TC_PACKAGE, TC_SOURCE)
     written, failed, confined = [], [], []
 
     for e in ar.toc:
