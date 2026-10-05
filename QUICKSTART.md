@@ -73,7 +73,7 @@ you is just a data structure to a program that knows the format.
 ## If it is not a PyInstaller program
 
 Nanodesu! will say so instead of guessing. For everything else, use
-[Triage](https://github.com/Nesarf/triage), which identifies the file by its actual bytes,
+[Torikago](https://github.com/Nesarf/Torikago), which identifies the file by its actual bytes,
 names the language and packer, extracts indicators, and — like this tool — never executes
 the target.
 
@@ -104,7 +104,7 @@ python nanodesu.py build self -o rebuilt.exe
 * [`README.md`](README.md) — the full picture, including the format details
 * [`tools/charlayer.py`](tools/charlayer.py) — a layered character-canvas renderer that
   ships with this repo
-* [Triage](https://github.com/Nesarf/triage) — the static-triage sibling for unknown files
+* [Torikago](https://github.com/Nesarf/Torikago) — the static-triage sibling for unknown files
   in general
 
 No network access. No dependencies beyond Python 3.9+. Nothing here runs the program you
