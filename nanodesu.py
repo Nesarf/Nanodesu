@@ -49,6 +49,8 @@ Examples:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import argparse
 import io
 import json
@@ -85,7 +87,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.5.1"
+_SOURCE_VERSION = "1.6.0"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -1461,7 +1463,127 @@ def build_parser():
     p.add_argument("-o", "--output", required=True)
     p.add_argument("--pylib")
     p.add_argument("--pyver", type=int)
+
+    p = sub.add_parser("neutralize",
+                       help="build a defanged VARIANT: replace modules with inert stubs. "
+                            "The original is never touched and the result is never called safe")
+    common(p)
+    p.add_argument("-o", "--out", help="working directory (default: alongside the archive)")
+    p.add_argument("--modules", nargs="*", metavar="NAME",
+                   help="module names to replace (default: every .pyc found)")
+    p.add_argument("--in-pyz", action="store_true",
+                   help="expand the PYZ first and only replace modules inside it")
+    p.add_argument("--dry-run", action="store_true",
+                   help="report what would be replaced without writing anything")
+    p.add_argument("--force", action="store_true", help="reuse an existing working directory")
     return ap
+
+
+def cmd_neutralize(target: str, args) -> int:
+    """Build a defanged variant. Never touches the original; records every change.
+
+    Deliberately verbose about what it is not: the output is a variant, the sample is unchanged, and
+    nothing here certifies the result as safe. See neutralize.py for why that wording is load-bearing
+    rather than polite.
+    """
+    import neutralize as nz
+
+    archive = Path(target)
+    if not archive.is_file():
+        print("not found: %s" % archive, file=sys.stderr)
+        return 1
+
+    # The original is only ever read. Checked here, once, rather than trusted to every call below.
+    before = archive.stat()
+    ar = find_archive(archive)
+
+    work = Path(args.out) if args.out else archive.parent / (archive.stem + "_neutralize")
+    tree = work / "tree"
+    if work.exists() and not args.force:
+        print("refusing to reuse %s (pass --force)" % work, file=sys.stderr)
+        return 1
+    work.mkdir(parents=True, exist_ok=True)
+
+    print("extracting (the original is only read) -> %s" % tree)
+    # The argument objects are built explicitly rather than faked with an empty class: each command
+    # reads a different set of attribute names, and a missing one fails at the point of use with an
+    # AttributeError rather than at the point of construction.
+    rc = cmd_extract(ar, SimpleNamespace(output=str(tree), pyc=True, pyc_suffix=True,
+                                         verbose=False, layout=None, internal_dir=None))
+    if rc != 0:
+        return rc
+
+    # The PYZ is where a hostile module usually lives, so expand it when asked.
+    if args.in_pyz:
+        pyzs = sorted(tree.glob("*.pyz"))
+        if not pyzs:
+            print("no PYZ entry in this archive, so there is nothing to expand", file=sys.stderr)
+            return 1
+        rc = cmd_pyz(str(pyzs[0]), SimpleNamespace(output=str(tree / "_pyz_modules"),
+                                                   list=0, bare=False))
+        if rc != 0:
+            return rc
+
+    found = nz.find_modules(tree)
+    wanted = []
+    for item in found:
+        if args.modules:
+            if item["rel"] not in args.modules and Path(item["rel"]).stem not in args.modules:
+                continue
+        if args.in_pyz and not item["in_pyz"]:
+            continue
+        wanted.append(item)
+
+    if not wanted:
+        print("no module matched %s -- nothing was replaced"
+              % (args.modules or "(all)"), file=sys.stderr)
+        print("available (first 20):", file=sys.stderr)
+        for item in found[:20]:
+            print("   %s%s" % (item["rel"], "   [PYZ]" if item["in_pyz"] else ""), file=sys.stderr)
+        return 1
+
+    record = nz.neutralize(archive, tree, modules=wanted,
+                           python_version=ar.pyver_str(),
+                           dry_run=args.dry_run)
+    if record.get("refused"):
+        print("refused: %s" % record["refused"], file=sys.stderr)
+        return 1
+
+    if not args.dry_run:
+        nz.write_record(record, tree)
+        print("repacking the variant (the original stays untouched)")
+        variant = work / (archive.stem + "_defanged.exe")
+        rc = cmd_build(str(tree), SimpleNamespace(output=str(variant),
+                                                  pylib=None, pyver=None))
+        if rc != 0:
+            return rc
+        record["variant"] = str(variant)
+        nz.write_record(record, tree)
+
+    print()
+    print("replaced %d module(s)%s" % (len(record["replaced"]), " (dry run)" if args.dry_run else ""))
+    for r in record["replaced"][:12]:
+        # PYZ entries are named by dotted module name; top-level ones by path. Both appear here, and
+        # assuming the path key crashed the reporter after the work had already succeeded.
+        label = r.get("rel") or ("%s  [PYZ]" % r.get("name", "?"))
+        print("   %-46s %6d -> %6d bytes" % (label[:46], r.get("before_bytes", 0),
+                                              r.get("after_bytes", 0)))
+    if len(record["replaced"]) > 12:
+        print("   ... and %d more" % (len(record["replaced"]) - 12))
+    print()
+    if not args.dry_run:
+        print("variant : %s" % record.get("variant"))
+    print("record  : %s" % (tree / "_neutralize_record.json"))
+    print()
+    print("This output is a VARIANT, not a repaired file. It is not clean, not safe and not fixed.")
+    print("Its hash changed, so it will not match threat intelligence or AV signatures any more --")
+    print("it will scan clean because it is UNKNOWN, not because it is good.")
+    print("Stubbing a module proves that module no longer runs; it proves nothing about the rest.")
+    after = archive.stat()
+    if (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+        print("WARNING: the original archive changed, which should be impossible", file=sys.stderr)
+        return 1
+    return 0
 
 
 def main(argv=None):
@@ -1504,6 +1626,8 @@ def main(argv=None):
         return 0
     if args.cmd == "pyz":
         return cmd_pyz(args.target, args)
+    if args.cmd == "neutralize":
+        return cmd_neutralize(args.target, args)
     if args.cmd == "build":
         return cmd_build(args.target, args)
     ar = find_archive(args.target)

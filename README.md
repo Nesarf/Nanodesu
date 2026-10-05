@@ -219,6 +219,43 @@ fails, so none of them is optional.
    per-entry `pyc_header` length from the manifest. Otherwise the marshalled
    code object stored in the archive is corrupted.
 
+## `neutralize` — a defanged variant, not a cure
+
+```bash
+python nanodesu.py neutralize app.exe -o work/ --in-pyz --modules payload
+```
+
+Replaces named Python modules inside the PYZ with a stub that does nothing, then repacks. The result
+is `app_defanged.exe`.
+
+**It is a variant. It is never clean, safe or fixed, and this tool will not call it any of those.**
+That is not caution, it is the mechanism: editing an archive changes its hash and invalidates its
+signature, so the variant **stops matching threat intelligence and AV caches** — meaning it will
+always scan clean, **not because it is clean but because nobody has seen it**. A tool that produced
+such files and called the result safe would be manufacturing false confidence.
+
+What it does guarantee:
+
+* **The original is never modified, moved or deleted.** It stays exactly where it was; it is the only
+  thing a real engine can still judge.
+* **The payload bytes are gone, not just unreferenced.** The PYZ is rebuilt rather than patched in
+  place, so the original compressed block does not survive after the shorter stub.
+* **Every change is recorded** in `_neutralize_record.json` — dotted name, bytes before and after —
+  so the transformation can be audited.
+* **The stub is compiled by the interpreter matching the archive** where one is found, and loaded back
+  before anything is replaced.
+
+What it does **not** do, and the report says so each time:
+
+* **It does not make the program work.** Stubbing a module the program depends on **breaks it** —
+  verified: a sample that called into the stubbed module died with `AttributeError`. Removing the
+  malicious capability and keeping the program running are different goals, and this does the first.
+* **It does not prove the rest of the file is harmless.** Stubbing a module proves that module no
+  longer runs, and nothing else.
+* **It cannot do this for machine code.** This works because a PyInstaller payload lives at the Python
+  level. A hostile DLL or shellcode has no equivalent small, checkable act, and claiming otherwise
+  would be a lie about coverage.
+
 ## Notes and limits
 
 * **Onefile builds only.** The file must end with the `MEI` cookie. A onedir
