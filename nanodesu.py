@@ -85,7 +85,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.3.2"
+_SOURCE_VERSION = "1.4.0"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -1234,11 +1234,112 @@ def read_file(target, name: str) -> bytes:
 
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# The voice
+#
+# Lilith speaks in the interactive prose and nowhere else. See PERSONA.md for the character; the
+# two rules that decided the shape of this code are:
+#
+#   * she never claims to have done something she did not do -- the tool does not execute anything,
+#     and she is proud of that, so "I looked" must never become "I ran it"
+#   * she is silent in everything a program reads, because a persona in JSON is a parsing bug
+#
+# The register is a rendering choice, not a second source of truth: every line below says exactly
+# what the plain line says.
+# --------------------------------------------------------------------------- #
+
+_PLAIN = [False]
+
+
+def set_plain(value: bool) -> None:
+    """Turn Lilith off (or back on). Read once at startup from --plain / NANODESU_PLAIN."""
+    _PLAIN[0] = bool(value)
+
+
+def is_plain() -> bool:
+    return _PLAIN[0]
+
+
+# name -> (Lilith, plain). Same fact, two registers.
+#
+# The epilog is not in here: it is composed differently for each register (the plain one keeps the
+# module docstring alone), so it lives in `epilog_for` rather than as a pair of strings. Putting it
+# here as a bare string made `say()` unpack three values into two -- which is exactly the kind of
+# thing this table's shape should make impossible, so the shape is now enforced by a test.
+PROSE = {
+    "nothing_to_do": (
+        "\u2026\u304a\u4ed5\u4e8b\u3092\u304f\u3060\u3055\u3044\u3002"
+        "\u4f55\u3082\u6307\u793a\u3055\u308c\u3066\u3044\u306a\u3044\u306e\u3067\u3059\u3002",
+        "no command given",
+    ),
+    "unpacking": (
+        "\u5916\u5957\u3092\u8131\u304c\u305b\u308b\u306e\u3067\u3059",
+        "unpacking",
+    ),
+    "repacking": (
+        "\u7e70\u308a\u76f4\u3059\u306e\u3067\u3059",
+        "repacking",
+    ),
+    "verified": (
+        "\u305f\u3057\u304b\u306b\u898b\u305f\u306e\u3067\u3059",
+        "verified",
+    ),
+    "nothing_found": (
+        "\u2026\u2026\u666e\u901a\u306a\u306e\u3067\u3059\u3002"
+        "\u3064\u307e\u3089\u306a\u3044\u306e\u3067\u3059\u3002",
+        "nothing unusual",
+    ),
+    "cannot_tell": (
+        "\u5206\u304b\u3089\u306a\u3044\u306e\u3067\u3059\u3002"
+        "\u5206\u304b\u3089\u306a\u3044\u3068\u8a00\u3046\u306e\u304c"
+        "\u8aa0\u5b9e\u306a\u306e\u3067\u3059\u3002",
+        "cannot determine",
+    ),
+}
+
+
+def say(key: str) -> str:
+    """The line for `key` in whichever register is active.
+
+    Every entry is a (Lilith, plain) pair; a bare string here used to reach the unpack and raise,
+    which is why a test now checks the shape of every entry rather than trusting the table.
+    """
+    entry = PROSE.get(key)
+    if entry is None:
+        return key
+    lilith, plain = entry
+    return plain if _PLAIN[0] else lilith
+
+
+def epilog_for(doc: str) -> str:
+    """The help epilog: the module docstring, plus Lilith's closing lines when she is on.
+
+    Kept out of PROSE because the two registers do not differ by one line here -- the plain one is
+    the docstring alone, with nothing appended.
+    """
+    if _PLAIN[0]:
+        return doc
+    return doc + "\n" + (
+        "  \u79c1\u306f\u3001\u8d77\u3053\u3055\u306a\u3044\u306e\u3067\u3059\u3002\n"
+        "  \u5916\u5957\u3092\u8131\u304c\u305b\u3066\u3001\u4e2d\u8eab\u3092\u898b\u308b"
+        "\u3060\u3051\u306a\u306e\u3067\u3059 \u2014 \u565b\u307f\u3064\u304f\u5fc5\u8981"
+        "\u306f\u3001\u306a\u3044\u306e\u3067\u3059\u3002\n"
+        "\n"
+        "  (--plain \u3067\u79c1\u306f\u9ed9\u308a\u307e\u3059)"
+    )
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="nanodesu",
         description="Unpack and repack PyInstaller onefile executables (stdlib only)",
-        formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        # `__doc__` is the module docstring, which is the plain-text description of what this is.
+        # It stays in the epilog for --plain and for anyone reading the source; the voice replaces
+        # it only when the voice is on.
+        epilog=epilog_for(__doc__))
+    ap.add_argument("--plain", action="store_true",
+                    help="speak plainly: no persona in the prose (also NANODESU_PLAIN=1)")
     sub = ap.add_subparsers(dest="cmd")
 
     def common(p):
@@ -1295,10 +1396,20 @@ def build_parser():
 
 
 def main(argv=None):
+    # The register has to be decided before the parser is built, because the parser's own help
+    # text is one of the places the voice appears. So the flag is scanned here rather than read
+    # from the parsed result.
+    raw = list(sys.argv[1:] if argv is None else argv)
+    plain_env = os.environ.get("NANODESU_PLAIN", "").strip().lower() in ("1", "true", "yes", "on")
+    set_plain("--plain" in raw or plain_env)
+    raw = [a for a in raw if a != "--plain"]
+
     ap = build_parser()
-    args = ap.parse_args(argv)
+    args = ap.parse_args(raw)
     if not args.cmd:
         ap.print_help()
+        if not is_plain():
+            print("\n" + say("nothing_to_do"))
         return 0
     if args.cmd == "pyz":
         return cmd_pyz(args.target, args)
