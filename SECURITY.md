@@ -39,6 +39,20 @@ I aim to acknowledge within a few days and to ship a fix with a test that fails 
 
 ## Claims this tool will not make, even if asked to
 
+**The same list travels with every result the tool produces.** `BOUNDARY_NOTICE` (see `boundary.py`)
+is attached to every return path, and `info` prints it without being asked — so a reader does not have
+to find this file to learn what an extraction does and does not establish. Read it directly with:
+
+```bash
+python nanodesu.py --boundary
+```
+
+It exists because a successful extraction invites four specific assumptions, and each line answers one:
+that extraction means source, that a byte-identical repack means safety, that a clean run means nothing
+is hidden, and that unpacking succeeded means unpacking is complete. A general caution gets skimmed;
+naming the assumption does not.
+
+
 * **It will never say a file is safe.** It reports what is *in* an archive. It does not conclude the
   archive is harmless, and no result should be read that way — including a clean verdict from an
   antivirus engine it handed the file to, which is that engine's opinion about a sample, not a
