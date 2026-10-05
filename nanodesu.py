@@ -69,7 +69,24 @@ TOC_ENTRY_FORMAT = "!IIIIBc"
 TOC_ENTRY_LEN = struct.calcsize(TOC_ENTRY_FORMAT)    # 18
 # Kept in step with pyproject.toml. A caller that loads this module by path -- which is how
 # triage finds it -- has no package metadata to read, so the version has to live in the source.
-VERSION = "1.3.0"
+def _version() -> str:
+    """The version of the installed distribution, or of this file.
+
+    A caller may load this module **by path** rather than importing it -- the sibling tool finds
+    `nanodesu.py` on disk and loads it that way -- and then there is no installed distribution to
+    ask, so the constant is the fallback for that case. When it *is* installed, the metadata wins,
+    which is what keeps this number from drifting away from `pyproject.toml`.
+    """
+    try:
+        from importlib.metadata import version as _dist_version
+        return _dist_version("nanodesu")
+    except Exception:
+        return _SOURCE_VERSION
+
+
+# Kept only for the by-path case. When the package is installed this value is not used.
+_SOURCE_VERSION = "1.3.0"
+VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
 
