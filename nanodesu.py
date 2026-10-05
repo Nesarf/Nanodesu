@@ -59,7 +59,7 @@ import shutil
 import struct
 import sys
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 MAGIC = b"MEI\x0c\x0b\x0a\x0b\x0e"
@@ -68,6 +68,12 @@ COOKIE_LEN = struct.calcsize(COOKIE_FORMAT)          # 88
 TOC_ENTRY_FORMAT = "!IIIIBc"
 TOC_ENTRY_LEN = struct.calcsize(TOC_ENTRY_FORMAT)    # 18
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
+
+# How much a single entry is allowed to decompress to, regardless of what the archive declares.
+# The declaration is a claim by whoever built the archive, so it can only be used to check the
+# result -- never to authorise the allocation. Without a limit of our own, an archive that
+# honestly declares 20 GB gets 20 GB attempted, and the honesty is the attack.
+MAX_ENTRY_BYTES = 2 << 30
 PYC_HEADER_LEN = 16          # 3.7+ .pyc header: magic(4)+flags(4)+mtime(4)+size(4)
 PYZ_MAGIC = b"PYZ\0"
 NULB = b"\x00"
@@ -129,6 +135,14 @@ class Archive:
     base_pos: int
     toc: list
     options: list
+    integrity: list = field(default_factory=list)
+    """Everything the parser found structurally wrong, as facts rather than exceptions.
+
+    A malformed archive is a finding about the file, not a reason to refuse to describe it: this
+    is an analysis tool, and 'the table of contents is truncated' is exactly the sort of thing
+    somebody pointing it at an unknown file wants to be told. So the parse records and continues,
+    and the CLI surfaces it.
+    """
 
     @property
     def stub_size(self) -> int:
@@ -150,12 +164,32 @@ class Archive:
 # Parsing
 # --------------------------------------------------------------------------- #
 
-def _inflate(data: bytes) -> bytes:
+def _inflate(data: bytes, limit: int | None = None) -> bytes:
+    """Decompress, refusing to build more than `limit` bytes.
+
+    A declared uncompressed size is a claim by whoever built the archive, so it cannot be the
+    only thing standing between a small file and an allocation of whatever that claim says. The
+    previous version called zlib.decompress and compared lengths only afterwards, so a 10 MB
+    entry declaring 20 GB would have tried to allocate the 20 GB first. Streaming with a cap
+    turns that into a refusal rather than a memory event.
+
+    `limit=None` keeps the old behaviour, for callers with no declared size to check against.
+    """
     for wbits in (15, -15, 31):
+        obj = zlib.decompressobj(wbits)
         try:
-            return zlib.decompress(data, wbits)
+            out = obj.decompress(data, limit if limit is not None else 0)
         except zlib.error:
             continue
+        if obj.unconsumed_tail:
+            raise zlib.error(
+                "entry decompresses to more than the %d bytes allowed (its declared size is a "
+                "claim, not a guarantee)" % (limit,))
+        try:
+            out += obj.flush()
+        except zlib.error:
+            continue
+        return out
     raise zlib.error("could not decompress")
 
 
@@ -195,35 +229,81 @@ def find_archive(path) -> Archive:
     toc, options = [], []
     cur = 0
     n = len(data)
+    integrity = []
+
+    # The region an entry's payload is allowed to live in, as absolute file offsets. Everything
+    # the TOC claims is checked against these before it is used, because a claimed offset or
+    # length is attacker-controlled: a value past the cookie would have read into the 88-byte
+    # header, and one far past the end would have been handed to zlib before anyone noticed.
+    payload_end = base + pkg_len - COOKIE_LEN      # == cookie_pos, measured
+
+    if toc_off < 0 or toc_off + toc_size > pkg_len - COOKIE_LEN:
+        integrity.append("table of contents at %#x+%d lies outside the archive payload"
+                         % (toc_off, toc_size))
+
     while cur + TOC_ENTRY_LEN <= n:
         (elen, eoff, dlen, ulen, cflag, tc) = struct.unpack(
             TOC_ENTRY_FORMAT, data[cur:cur + TOC_ENTRY_LEN])
         name_len = elen - TOC_ENTRY_LEN
         if elen <= TOC_ENTRY_LEN or name_len <= 0 or cur + TOC_ENTRY_LEN + name_len > n:
+            integrity.append("entry %d has an implausible length (%d); table truncated here"
+                             % (len(toc) + 1, elen))
+            break
+        if elen % 16 != 0:
+            # The writer pads every record to a multiple of 16, so a record that is not is
+            # either corrupt or a deliberate attempt to desynchronise the walk.
+            integrity.append("entry %d length %d is not 16-byte aligned; table truncated here"
+                             % (len(toc) + 1, elen))
             break
         try:
             tc_s = tc.decode("ascii")
         except UnicodeDecodeError:
+            integrity.append("entry %d has a non-ASCII type code; table truncated here"
+                             % (len(toc) + 1))
             break
         if tc_s not in VALID_TYPES:
+            integrity.append("entry %d has unsupported type code %r (not in %s); table truncated "
+                             "here" % (len(toc) + 1, tc_s, "".join(sorted(VALID_TYPES))))
             break
         raw_name = data[cur + TOC_ENTRY_LEN: cur + TOC_ENTRY_LEN + name_len]
         name = raw_name.rstrip(NULB).decode("utf-8", "replace")
         cur += TOC_ENTRY_LEN + name_len
+        if cflag not in (0, 1):
+            integrity.append("entry %r has compression flag %d, which the format does not define"
+                             % (name, cflag))
+        entry_end = base + eoff + dlen
+        # Entry data begins at `base`, not after the header: measured on a real archive, the first
+        # entry has offset 0 and the bytes there decompress to a valid code object whose length
+        # equals its declared size. Requiring offset >= 88 would have been an invented shape
+        # requirement, and it flagged a perfectly good file -- twice, because the first correction
+        # only moved the wrong bound instead of checking what the offset actually means.
+        #
+        # So the invariant is what the reader relies on and nothing more: the claimed bytes must
+        # be inside the archive and must not run into the table of contents.
+        entry_limit = base + min(toc_off, pkg_len - COOKIE_LEN)
+        if eoff < 0 or dlen < 0 or ulen < 0 or entry_end > entry_limit:
+            integrity.append("entry %r claims bytes %#x..%#x, past the end of the data region "
+                             "(%#x)" % (name, base + eoff, entry_end, entry_limit))
         if tc_s == TC_OPTION:
             options.append(name)
             continue
         toc.append(Entry(name=name, offset=eoff, csize=dlen, usize=ulen,
                          cmprs=cflag, tcode=tc_s))
+    if cur != n and not integrity:
+        integrity.append("table of contents is %d bytes but %d were consumed"
+                         % (n, cur))
     if not toc:
-        raise SystemExit("could not parse the table of contents "
-                         "(toc_off=%#x, toc_len=%d)" % (toc_off, toc_size))
+        # Say why. "could not parse" on its own is the least useful thing to tell somebody who
+        # pointed this at an unknown file, and the specific reason is already known here.
+        detail = ("\n  - " + "\n  - ".join(integrity[:5])) if integrity else ""
+        raise SystemExit("could not parse the table of contents (toc_off=%#x, toc_len=%d)%s"
+                         % (toc_off, toc_size, detail))
 
     for e in toc:
         e.raw_pos = base + e.offset
     return Archive(path=path, file_size=size, cookie_pos=cookie_pos, pkg_len=pkg_len,
                    toc_off=toc_off, toc_size=toc_size, pyver=pyver, pylib=pylib,
-                   base_pos=base, toc=toc, options=options)
+                   base_pos=base, toc=toc, options=options, integrity=integrity)
 
 
 def read_entry(ar: Archive, e: Entry, verify_len: bool = True) -> bytes:
@@ -233,7 +313,14 @@ def read_entry(ar: Archive, e: Entry, verify_len: bool = True) -> bytes:
     if len(blob) != e.stored_size:
         raise IOError("truncated read of %s (%d/%d)" % (e.name, len(blob), e.stored_size))
     if e.cmprs:
-        blob = _inflate(blob)
+        # Two independent bounds, because they defend against different things: ours stops an
+        # absurd entry even when the archive is honest about its size, and the declared size stops
+        # a stream that is larger than the archive claims (which is the interesting failure).
+        if e.usize > MAX_ENTRY_BYTES:
+            raise IOError("%s declares %d bytes, over the %d-byte per-entry limit"
+                          % (e.name, e.usize, MAX_ENTRY_BYTES))
+        cap = min(e.usize + (1 << 20), MAX_ENTRY_BYTES) if e.usize else MAX_ENTRY_BYTES
+        blob = _inflate(blob, cap)
     if verify_len and len(blob) != e.usize:
         raise IOError("size mismatch after decompressing %s (%d/%d)"
                       % (e.name, len(blob), e.usize))
@@ -526,6 +613,18 @@ def cmd_extract(ar: Archive, args) -> int:
     manifest = []
     confined = []
     total = len(ar.toc)
+    # The header is prepended during the single pass below rather than in a second one. The
+    # second pass recomputed the path with the same expression, which meant any entry whose path
+    # had been clamped during the first write was looked for at its *unclamped* location: the
+    # file was written to one place, the header was applied to nothing, and the manifest still
+    # claimed 16 bytes had been added -- so a later repack stripped 16 bytes that were never
+    # there and corrupted the entry. One pass cannot disagree with itself.
+    pyc_magic = pyc_magic_for(ar) if args.pyc else None
+    magic_states = (TC_MODULE, TC_MODULE_DEP, TC_SOURCE)
+    if args.pyc and pyc_magic is None:
+        print("  ! no .pyc magic available for Python %s, skipping headers"
+              % ar.pyver_str(), file=sys.stderr)
+
     for i, e in enumerate(ar.toc, 1):
         try:
             blob = read_entry(ar, e, verify_len=False)
@@ -541,7 +640,8 @@ def cmd_extract(ar: Archive, args) -> int:
         # strip exactly that many. Otherwise the marshalled code object inside the
         # archive is corrupted, and the repacked executable will not start.
         wrapped = 0
-        if args.pyc and e.tcode in (TC_MODULE, TC_MODULE_DEP, TC_SOURCE):
+        if pyc_magic is not None and e.tcode in magic_states:
+            blob = wrap_pyc(blob, pyc_magic)
             wrapped = PYC_HEADER_LEN
         # The name is untrusted, so the path is clamped before it is written, and the
         # repair is recorded: 'rel' keeps the original shape for an exact repack, while
@@ -561,27 +661,9 @@ def cmd_extract(ar: Archive, args) -> int:
         ok += 1
         if args.verbose or i % 200 == 0 or i == total:
             print("  [%d/%d] %s" % (i, total, dest.relative_to(out_root)))
-    if args.pyc:
-        magic = pyc_magic_for(ar)
-        if magic is None:
-            print("  ! no .pyc magic available for Python %s, skipping headers"
-                  % ar.pyver_str(),
-                  file=sys.stderr)
-        else:
-            fixed = 0
-            for e in ar.toc:
-                if e.tcode not in (TC_MODULE, TC_MODULE_DEP, TC_SOURCE):
-                    continue
-                rel = layout_path(e, internal_dir) if args.layout else Path(flat_name(e))
-                if not rel.name.endswith(".pyc"):
-                    rel = rel.with_name(rel.name + ".pyc")
-                dest = out_root / rel
-                if not dest.is_file():
-                    continue
-                blob = dest.read_bytes()
-                if blob[:4] != magic:
-                    dest.write_bytes(wrap_pyc(blob, magic))
-                    fixed += 1
+    if args.pyc and pyc_magic is not None:
+        fixed = sum(1 for m in manifest if m["pyc_header"])
+        if fixed:
             print("added a valid .pyc header to %d modules (Python %s)"
                   % (fixed, ar.pyver_str()))
     with open(ar.path, "rb") as f:
@@ -597,6 +679,9 @@ def cmd_extract(ar: Archive, args) -> int:
         "options": ar.options,
         "internal_dir": internal_dir,
         "stub": stub_path.name,
+        # Whatever the parser found structurally wrong is carried here rather than thrown, so a
+        # damaged archive still produces a usable description of itself.
+        "integrity": list(getattr(ar, "integrity", []) or []),
         "entries": manifest,
     }
     (out_root / "_archive_manifest.json").write_text(
@@ -609,6 +694,11 @@ def cmd_extract(ar: Archive, args) -> int:
               % len(confined))
         for original, placed in confined[:10]:
             print("      %r -> %s" % (original, placed))
+    if meta["integrity"]:
+        print("  ! %d structural problem(s) recorded in the manifest:"
+              % len(meta["integrity"]))
+        for note in meta["integrity"][:10]:
+            print("      %s" % note)
     print("bootloader stub saved as %s (%s)" % (stub_path, human(len(stub))))
     print("manifest written to _archive_manifest.json (used by 'build')")
     return 0 if fail == 0 else 2
@@ -663,6 +753,7 @@ def cmd_pyz(target: str, args) -> int:
     out = Path(args.output) if args.output else p.parent / (p.stem + "_extracted")
     out.mkdir(parents=True, exist_ok=True)
     ok = nspkg = bad = 0
+    confined = []
     names = []
     taken: dict = {}          # relative output path -> module name that claimed it
     collided: list = []
@@ -696,7 +787,18 @@ def cmd_pyz(target: str, args) -> int:
             collided.append((name, taken[rel], flat))
             rel = flat
         taken[rel] = name
-        dest = out / rel
+        # The module name comes from the PYZ table of contents, which comes from an archive
+        # someone else built, so it is untrusted input in exactly the way an entry name is.
+        # Without this, the same escape that the CArchive path was fixed for stayed open here:
+        # a module named 'C:/abs/x' produced the destination 'C:\abs\x.pyc', and a name of
+        # '/abs/x' landed outside the output directory entirely. One boundary, half repaired.
+        safe_rel = confining(out, Path(rel), name)
+        if safe_rel.as_posix() != rel:
+            confined.append((name, safe_rel.as_posix()))
+        if not inside(out, safe_rel):
+            bad += 1
+            continue
+        dest = out / safe_rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         # The PYZ header already carries the bytecode magic, so a valid .pyc can be written
         # without guessing. Default to that and keep the raw form behind --bare, so both
@@ -709,6 +811,13 @@ def cmd_pyz(target: str, args) -> int:
     print("extracted bytecode for %d modules -> %s" % (ok, out))
     print("  %d namespace packages (no code object, expected), %d failed"
           % (nspkg, bad))
+    if confined:
+        # A module name that tried to leave the output directory is a fact about the archive,
+        # not an inconvenience: say which and where it went instead.
+        print("  ! %d module name(s) tried to leave the output directory and were confined:"
+              % len(confined))
+        for original, placed in confined[:10]:
+            print("      %r -> %s" % (original, placed))
     if collided:
         print("  %d module path collision(s), written with a flattened name instead:"
               % len(collided))
@@ -759,7 +868,16 @@ def cmd_build(root: str, args) -> int:
         missing = 0
         internal = meta.get("internal_dir") or ""
         for item in meta.get("entries", []):   # keep the original order; it matters
-            fp = root / item["rel"]
+            # Where the bytes are, not where they would have gone unclamped. Extraction writes to
+            # safe_rel and records it; reading `rel` means any entry whose path had to be clamped
+            # is simply not found, and the repack silently drops it -- which is how this went
+            # unnoticed: every ordinary archive has rel == safe_rel, so only a confined entry
+            # exposed it. `name` still carries the original for the table of contents.
+            on_disk = item.get("safe_rel") or item["rel"]
+            fp = root / on_disk
+            if not fp.is_file() and item.get("safe_rel") and item["safe_rel"] != item["rel"]:
+                # Manifests written before safe_rel existed, or files moved by hand.
+                fp = root / item["rel"]
             if not fp.is_file():
                 missing += 1
                 continue
@@ -901,9 +1019,11 @@ def build_parser():
     p.add_argument("--flat", dest="layout", action="store_false", default=True,
                    help="flat output instead of the runtime directory layout")
     p.add_argument("--internal-dir", default="_internal")
-    p.add_argument("--pyc-suffix", action="store_true", default=True,
-                   help="append .pyc to module bytecode (default)")
-    p.add_argument("--no-pyc-suffix", dest="pyc_suffix", action="store_false")
+    # Only the negative form is offered. The argument used to be `--pyc-suffix` with
+    # `default=True`, which made it a flag that could be passed but changed nothing -- a switch
+    # that cannot switch. Named the other way round it reads honestly, and the default is stated.
+    p.add_argument("--no-pyc-suffix", dest="pyc_suffix", action="store_false",
+                   help="do not append .pyc to module bytecode (default appends it)")
     p.add_argument("--pyc", action="store_true",
                    help="prepend a valid .pyc header to module bytecode")
     p.add_argument("-v", "--verbose", action="store_true")

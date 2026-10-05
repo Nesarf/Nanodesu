@@ -21,7 +21,18 @@ A PyInstaller onefile executable is laid out like this:
 ```
 
 `Nanodesu!` reads that structure, takes every embedded file out of it, and can
-put the whole thing back together again — byte for byte.
+put the whole thing back together again — every entry's **contents** identical,
+with the table of contents preserved in its original shape.
+
+Two different things get called "faithful", and they are worth separating:
+
+| Claim | True? |
+|---|---|
+| every entry decompresses to the same bytes, TOC order/types/flags preserved, repacked exe runs | **yes** — this is what the tests check |
+| the repacked file is **bit-identical** to the original | **no** — the payload is recompressed with zlib level 9, so the compressed bytes differ even when nothing was modified |
+
+The distinction matters when you are comparing a repacked sample to a reference by hash: the
+contents will match and the file will not.
 
 | Command | Purpose |
 |---|---|
@@ -111,7 +122,8 @@ Against a 138.8 MB onefile build (PyInstaller 6.x, Python 3.12, PySide6):
 
 * **836 entries extracted, 0 failures**
 * `verify` decompresses all 836 entries and their lengths match
-* unpack → repack → unpack again reproduces **all 836 files byte for byte**
+* unpack → repack → unpack again reproduces **all 836 entry contents byte for byte**
+  (the repacked file itself is not bit-identical: see the note above)
   (SHA-256 identical, including the embedded PYZ archive)
 * the repacked executable **starts and runs normally**
 
