@@ -11,6 +11,15 @@ dependencies = []
 [project.scripts]
 nanodesu = "nanodesu:main"
 
+[project.urls]
+# The PyPI page had no links at all: nowhere to go for the source, the issue tracker or the
+# changelog. For a project whose purpose is to be useful to somebody who just found it, a
+# dead-end page is the wrong first impression.
+Homepage = "https://github.com/Nesarf/Nanodesu"
+Repository = "https://github.com/Nesarf/Nanodesu"
+Issues = "https://github.com/Nesarf/Nanodesu/issues"
+Changelog = "https://github.com/Nesarf/Nanodesu/releases"
+
 [tool.setuptools]
 py-modules = ["nanodesu"]
 

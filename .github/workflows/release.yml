@@ -1,0 +1,125 @@
+# Publish Nanodesu on a tag.
+#
+# Two artifacts from one tag: the tool itself to PyPI (so `pip install nanodesu` works), and the
+# signed standalone executable to the GitHub Release (so someone can run it without a Python).
+#
+# PyPI publication uses **Trusted Publishing**, not a token: the runner asks GitHub for an OIDC
+# token, PyPI verifies it came from this repository, this workflow file and the environment named
+# below, and issues a short-lived upload credential. Nothing secret is stored anywhere.
+#
+# The environment name is pinned here so that what the PyPI settings page must say is unambiguous.
+# A mismatch between this string and the publisher configured on PyPI is the most common way this
+# fails, and it fails at the last step of a release, after everything else has gone green.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read            # default for the whole workflow; jobs widen it where they need to
+
+jobs:
+  # --------------------------------------------------------------------------------------- #
+  # PyPI: build the sdist and wheel, check them, then publish through OIDC.
+  # --------------------------------------------------------------------------------------- #
+  pypi:
+    name: build and publish to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/nanodesu
+    permissions:
+      id-token: write       # required for Trusted Publishing; without it the upload is refused
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the build tooling
+        run: python -m pip install --upgrade build twine
+
+      - name: The tag must match the version in pyproject.toml
+        # A release whose tag disagrees with the metadata publishes something nobody can find by
+        # version later. Cheap to check, unpleasant to discover afterwards.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          declared=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "tag=$tag declared=$declared"
+          test "$tag" = "$declared" || { echo "::error::tag $tag does not match version $declared"; exit 1; }
+
+      - name: Build
+        run: python -m build
+
+      - name: Validate the distributions
+        run: python -m twine check dist/*
+
+      - name: List what is actually in the wheel
+        # A build that succeeds says nothing about its contents: a release once shipped without a
+        # module it needed, and every check passed. Printing the file list costs nothing.
+        run: python -c "import glob,zipfile;[print(n) for w in glob.glob('dist/*.whl') for n in zipfile.ZipFile(w).namelist()]"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@67339c736fd9354cd4f8cb0b744f2b82a74b5c70  # release/v1
+        with:
+          # Nothing to configure: the action finds the OIDC token in the environment and PyPI
+          # matches it against the publisher registered for this repository and workflow.
+          packages-dir: dist/
+
+  # --------------------------------------------------------------------------------------- #
+  # GitHub Release: the standalone Windows executable, unsigned.
+  # --------------------------------------------------------------------------------------- #
+  executable:
+    name: build the standalone executable
+    runs-on: windows-latest
+    permissions:
+      contents: write       # to attach the asset to the release
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pyinstaller
+
+      - name: Build the onefile executable
+        run: python -m PyInstaller --onefile --name nanodesu --console nanodesu.py
+
+      - name: Sanity-check that it runs
+        # An executable that cannot print its own help is not a release artifact.
+        run: .\dist\nanodesu.exe --help
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$env:GITHUB_REF_NAME" dist/nanodesu.exe --clobber
+
+      - name: Say plainly that this artifact is unsigned
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$env:GITHUB_REF_NAME" --json body --jq .body > body.md
+          @"
+
+          ---
+
+          ### The standalone .exe from this workflow is unsigned
+
+          The published ``.whl`` and ``.tar.gz`` on PyPI are the primary artifact and need no
+          signature: ``pip`` verifies them against the index hashes. The Windows executable
+          attached here is built by CI and carries **no Authenticode signature**, because the
+          signing certificate's private key deliberately does not exist in CI.
+
+          Signed builds are produced locally through the project's own signing pipeline. If a
+          signature matters for your use, build from source or use the PyPI package.
+          "@ | Out-File -Append -Encoding utf8 body.md
+          gh release edit "$env:GITHUB_REF_NAME" --notes-file body.md
