@@ -49,3 +49,24 @@ to a reference by hash, and the README now states it.
 ## Testing
 
 41 tests (was 21), green on Python 3.9, 3.12, 3.13 and 3.14.
+
+---
+
+## This build is signed
+
+`nanodesu.exe` carries an Authenticode signature with the publisher **S.M.Y.T.**, timestamped by a
+DigiCert responder so the signature remains verifiable after the certificate's own expiry.
+
+The certificate is **self-signed**, which means:
+
+* on a machine where `smyt-codesign.cer` is installed as a trusted publisher, Windows reports the
+  publisher as S.M.Y.T. and the signature verifies
+* on any other machine it is an untrusted signature: it identifies the publisher honestly, but it
+  does not remove a SmartScreen warning. Only a certificate from a recognised CA does that, and for
+  an organization certificate the CA fills in the organization field from a verified legal entity.
+
+If you want to verify it locally, the public certificate is in the repository's signing directory
+alongside the script that produced it. The private key is not published and never will be.
+
+Repacking a signed binary produces an **unsigned** one, because the signature covers the whole PE
+file and cannot survive a rewrite of its contents. Sign last.
