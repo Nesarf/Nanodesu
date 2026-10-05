@@ -55,18 +55,34 @@ to a reference by hash, and the README now states it.
 ## This build is signed
 
 `nanodesu.exe` carries an Authenticode signature with the publisher **S.M.Y.T.**, timestamped by a
-DigiCert responder so the signature remains verifiable after the certificate's own expiry.
+DigiCert RFC3161 responder, so the signature stays verifiable after the certificate's own expiry.
 
-The certificate is **self-signed**, which means:
+The signature's subject is:
 
-* on a machine where `smyt-codesign.cer` is installed as a trusted publisher, Windows reports the
-  publisher as S.M.Y.T. and the signature verifies
-* on any other machine it is an untrusted signature: it identifies the publisher honestly, but it
-  does not remove a SmartScreen warning. Only a certificate from a recognised CA does that, and for
-  an organization certificate the CA fills in the organization field from a verified legal entity.
+```
+O=S.M.Y.T., CN=S.M.Y.T. Code Signing
+```
 
-If you want to verify it locally, the public certificate is in the repository's signing directory
-alongside the script that produced it. The private key is not published and never will be.
+**No country field, deliberately.** S.M.Y.T. claims no nationality, and writing one would be a
+false statement of exactly the kind a signature exists to prevent.
+
+The certificate is **self-signed**, and that is a position rather than a shortcoming. A commercial
+certificate authority writes the organization field from a **verified legal entity** — it asks for
+company registration papers — so an unaligned academic seminar is not merely unable to buy such a
+certificate cheaply, it is outside what that system describes. `O=S.M.Y.T.` is the only certificate
+form that can state the truth here, and it keeps the root of trust with the people who made the
+thing instead of with a company that can revoke it, change its terms, or cease to exist.
+
+Stated plainly, because a signature that appears to mean more than it does is worse than none:
+
+* on a machine where the public certificate is installed as trusted, the signature verifies and the
+  publisher reads **S.M.Y.T.**
+* on any other machine it is an untrusted signature. It does not remove a SmartScreen warning.
+* what it does prove, to anyone who checks, is that this build came from S.M.Y.T. and has not been
+  altered since — the signing record carries the SHA-256 of the signed file
 
 Repacking a signed binary produces an **unsigned** one, because the signature covers the whole PE
 file and cannot survive a rewrite of its contents. Sign last.
+
+The signing tool, the public certificate and the append-only record of signings live in the
+project's signing directory. **The private key is not published and never will be.**
