@@ -51,6 +51,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import boundary
+
 import argparse
 import io
 import json
@@ -87,7 +89,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.6.0"
+_SOURCE_VERSION = "1.6.1"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -519,6 +521,9 @@ def cmd_info(ar: Archive, args) -> int:
     print("payload     : %s uncompressed in total" % human(ar.total_payload))
     if ar.options:
         print("OPTION      : %s" % ", ".join(ar.options))
+    print()
+    print("boundary")
+    print(boundary.format_boundary())
     return 0
 
 
@@ -1406,6 +1411,9 @@ def build_parser():
         # It stays in the epilog for --plain and for anyone reading the source; the voice replaces
         # it only when the voice is on.
         epilog=epilog_for(__doc__))
+    ap.add_argument("--boundary", action="store_true",
+                    help="print what this tool does not do, then exit. It travels with every "
+                         "result too; this just lets you read it on purpose")
     ap.add_argument("--plain", action="store_true",
                     help="speak plainly: no persona in the prose (also NANODESU_PLAIN=1)")
     ap.add_argument("--nsfw", action="store_true",
@@ -1619,6 +1627,10 @@ def main(argv=None):
 
     ap = build_parser()
     args = ap.parse_args(raw)
+
+    if args.boundary:
+        print(boundary.format_boundary())
+        return 0
     if not args.cmd:
         ap.print_help()
         if not is_plain():

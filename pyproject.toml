@@ -1,6 +1,6 @@
 [project]
 name = "nanodesu"
-version = "1.6.0"
+version = "1.6.1"
 description = "Unpack and repack PyInstaller single-file executables (standard library only)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -21,7 +21,7 @@ Issues = "https://github.com/Nesarf/Nanodesu/issues"
 Changelog = "https://github.com/Nesarf/Nanodesu/releases"
 
 [tool.setuptools]
-py-modules = ["nanodesu", "neutralize"]
+py-modules = ["nanodesu", "neutralize", "boundary"]
 
 [tool.setuptools.package-data]
 "*" = ["README.md", "LICENSE"]
