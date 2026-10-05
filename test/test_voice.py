@@ -192,3 +192,84 @@ class TestMachineReadableOutputStaysCold(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestTheAdultRegisterIsGatedOff(unittest.TestCase):
+    """Off unless asked for, and `--plain` wins if both are asked for.
+
+    The precedence is not arbitrary: `--plain` is a promise that the output is impersonal, and a
+    persona somebody cannot silence has been forced on them. So silence outranks heat.
+    """
+
+    def setUp(self):
+        self._p, self._n = nano.is_plain(), nano.is_nsfw()
+        self.addCleanup(nano.set_plain, self._p)
+        self.addCleanup(nano.set_nsfw, self._n)
+        nano.set_plain(False)
+        nano.set_nsfw(False)
+
+    def test_off_by_default(self):
+        self.assertFalse(nano.is_nsfw())
+
+    def test_the_flag_enables_it(self):
+        nano.set_nsfw(True)
+        self.assertTrue(nano.is_nsfw())
+
+    def test_plain_overrides_nsfw(self):
+        nano.set_nsfw(True)
+        nano.set_plain(True)
+        self.assertFalse(nano.is_nsfw(),
+                         "--plain must silence the adult register as well, not just the normal one")
+
+    def test_the_environment_variable_is_honoured(self):
+        env = dict(os.environ, NANODESU_NSFW="1")
+        out = subprocess.run([sys.executable, str(SOURCE), "--help"],
+                             capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0)
+
+    def test_both_flags_together_is_not_an_error(self):
+        out = subprocess.run([sys.executable, str(SOURCE), "--plain", "--nsfw", "--help"],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0)
+        self.assertFalse(any(ord(ch) > 0x2FFF for ch in out.stdout),
+                         "--plain --nsfw printed a persona")
+
+    def test_the_adult_table_has_a_different_line_for_every_key_it_defines(self):
+        """An adult register that repeats the normal one is not a register, it is a rename."""
+        for key, (adult, plain) in nano.NSFW_PROSE.items():
+            with self.subTest(key=key):
+                self.assertNotEqual(adult, nano.PROSE[key][0],
+                                    "%s is identical in both registers" % key)
+
+
+class TestNoRegisterCanLeakAKeyName(unittest.TestCase):
+    """`say` returns the key itself when neither table has it, so a key with no line prints jargon.
+
+    Found while wiring the adult register: asking for an adult line with the register off printed the
+    literal string "handed_over". Three keys in the normal table had the same shape -- their plain
+    value was the key name -- which is indistinguishable from the failure at the call site.
+    """
+
+    def setUp(self):
+        self._p, self._n = nano.is_plain(), nano.is_nsfw()
+        self.addCleanup(nano.set_plain, self._p)
+        self.addCleanup(nano.set_nsfw, self._n)
+
+    def test_every_key_has_a_line_in_every_register(self):
+        keys = set(nano.PROSE) | set(nano.NSFW_PROSE)
+        self.assertTrue(keys)
+        for key in sorted(keys):
+            for plain, nsfw in ((False, False), (False, True), (True, False)):
+                nano.set_plain(plain)
+                nano.set_nsfw(nsfw)
+                with self.subTest(key=key, plain=plain, nsfw=nsfw):
+                    self.assertNotEqual(nano.say(key), key,
+                                        "%s has no line with plain=%s nsfw=%s, so the output would "
+                                        "contain the key name" % (key, plain, nsfw))
+
+    def test_no_line_equals_its_own_key(self):
+        """The other half: a plain value equal to the key name is a silent version of the same bug."""
+        for key, (_lilith, plain) in nano.PROSE.items():
+            with self.subTest(key=key):
+                self.assertNotEqual(plain, key,
+                                    "the plain register for %s is the key name itself" % key)

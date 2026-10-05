@@ -85,7 +85,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.4.0"
+_SOURCE_VERSION = "1.5.0"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -1249,6 +1249,7 @@ def read_file(target, name: str) -> bytes:
 # --------------------------------------------------------------------------- #
 
 _PLAIN = [False]
+_NSFW = [False]
 
 
 def set_plain(value: bool) -> None:
@@ -1258,6 +1259,19 @@ def set_plain(value: bool) -> None:
 
 def is_plain() -> bool:
     return _PLAIN[0]
+
+
+def set_nsfw(value: bool) -> None:
+    """Enable the adult register. Off unless explicitly asked for; `--plain` wins if both are set.
+
+    The asymmetry is deliberate: `--plain` is a promise that the output is impersonal, and a persona
+    the user cannot silence is one that has been forced on them, so silence outranks heat.
+    """
+    _NSFW[0] = bool(value)
+
+
+def is_nsfw() -> bool:
+    return _NSFW[0] and not _PLAIN[0]
 
 
 # name -> (Lilith, plain). Same fact, two registers.
@@ -1274,15 +1288,15 @@ PROSE = {
     ),
     "unpacking": (
         "\u5916\u5957\u3092\u8131\u304c\u305b\u308b\u306e\u3067\u3059",
-        "unpacking",
+        "unpacking the archive",
     ),
     "repacking": (
         "\u7e70\u308a\u76f4\u3059\u306e\u3067\u3059",
-        "repacking",
+        "repacking the archive",
     ),
     "verified": (
         "\u305f\u3057\u304b\u306b\u898b\u305f\u306e\u3067\u3059",
-        "verified",
+        "every entry verified",
     ),
     "nothing_found": (
         "\u2026\u2026\u666e\u901a\u306a\u306e\u3067\u3059\u3002"
@@ -1295,6 +1309,53 @@ PROSE = {
         "\u8aa0\u5b9e\u306a\u306e\u3067\u3059\u3002",
         "cannot determine",
     ),
+    # Plain fallbacks for the adult register's keys. They must exist here: `say` returns the key
+    # *itself* when neither table has it, so a code path asking for an adult line while the register
+    # is off would print the literal word "handed_over" into the output. A register falling back to
+    # something sensible is a requirement, not a nicety.
+    "probing": (
+        "\u305d\u3053\u3092\u898b\u308b\u306e\u3067\u3059",
+        "probing that field",
+    ),
+    "pressed": (
+        "\u3053\u3053\u304b\u3089\u52d5\u304b\u306a\u3044\u306e\u3067\u3059",
+        "held in place",
+    ),
+    "dissolved": (
+        "\u3082\u3046\u62b5\u6297\u3057\u306a\u3044\u306e\u3067\u3059",
+        "no more resistance",
+    ),
+    "handed_over": (
+        "\u4e2d\u8eab\u306f\u3053\u308c\u3067\u5168\u90e8\u306a\u306e\u3067\u3059",
+        "contents complete",
+    ),
+}
+
+
+# The adult register: same facts, and the subject of the analysis is something she plays with.
+# See PERSONA.nsfw.md for the design -- briefly, the target is always the SAMPLE and never the
+# person reading, which is what keeps this a report rather than something aimed at the reader.
+# Nothing here is reachable without --nsfw or NANODESU_NSFW=1.
+NSFW_PROSE = {
+    # probe -> press -> dissolve -> hand over: the same four beats as explore, confirm, unpack,
+    # report. The point is not decoration; it is that the analysis already has these steps.
+    "probing": (
+        "\u305d\u3053\u304c\u5f31\u3044\u306e\u3067\u3059\u304b",
+        "probing",
+    ),
+    "pressed": (
+        "\u631f\u3093\u3067\u96e2\u3055\u306a\u3044\u306e\u3067\u3059",
+        "held in place",
+    ),
+    "dissolved": (
+        "\u3082\u3046\u7d42\u308f\u308a\u306a\u306e\u3067\u3059",
+        "no more resistance",
+    ),
+    "handed_over": (
+        "\u3054\u4e3b\u4eba\u69d8\u3001\u4e2d\u8eab\u306f\u3053\u308c\u3067"
+        "\u5168\u90e8\u306a\u306e\u3067\u3059",
+        "contents complete",
+    ),
 }
 
 
@@ -1304,11 +1365,16 @@ def say(key: str) -> str:
     Every entry is a (Lilith, plain) pair; a bare string here used to reach the unpack and raise,
     which is why a test now checks the shape of every entry rather than trusting the table.
     """
+    if _PLAIN[0]:
+        entry = PROSE.get(key) or NSFW_PROSE.get(key)
+        return entry[1] if entry else key
+    if is_nsfw():
+        entry = NSFW_PROSE.get(key) or PROSE.get(key)
+        return entry[0] if entry else key
     entry = PROSE.get(key)
     if entry is None:
         return key
-    lilith, plain = entry
-    return plain if _PLAIN[0] else lilith
+    return entry[0]
 
 
 def epilog_for(doc: str) -> str:
@@ -1340,6 +1406,9 @@ def build_parser():
         epilog=epilog_for(__doc__))
     ap.add_argument("--plain", action="store_true",
                     help="speak plainly: no persona in the prose (also NANODESU_PLAIN=1)")
+    ap.add_argument("--nsfw", action="store_true",
+                    help="allow the adult register in the prose; off unless asked for "
+                         "(also NANODESU_NSFW=1). --plain overrides it")
     sub = ap.add_subparsers(dest="cmd")
 
     def common(p):
@@ -1400,9 +1469,14 @@ def main(argv=None):
     # text is one of the places the voice appears. So the flag is scanned here rather than read
     # from the parsed result.
     raw = list(sys.argv[1:] if argv is None else argv)
-    plain_env = os.environ.get("NANODESU_PLAIN", "").strip().lower() in ("1", "true", "yes", "on")
-    set_plain("--plain" in raw or plain_env)
-    raw = [a for a in raw if a != "--plain"]
+    def _on(name):
+        return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+    set_plain("--plain" in raw or _on("NANODESU_PLAIN"))
+    # Off unless explicitly asked for. `set_nsfw` itself defers to plain, so passing both silences
+    # rather than heating.
+    set_nsfw("--nsfw" in raw or _on("NANODESU_NSFW"))
+    raw = [a for a in raw if a not in ("--plain", "--nsfw")]
 
     ap = build_parser()
     args = ap.parse_args(raw)
