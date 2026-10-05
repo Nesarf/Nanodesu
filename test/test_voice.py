@@ -273,3 +273,49 @@ class TestNoRegisterCanLeakAKeyName(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertNotEqual(plain, key,
                                     "the plain register for %s is the key name itself" % key)
+
+
+class TestTheVoiceSurvivesANonUtf8Console(unittest.TestCase):
+    """The regression CI caught and no test did, because every test ran where stdout was UTF-8.
+
+    Windows binds `sys.stdout` to the console code page -- cp1252 on a stock runner -- so printing
+    Japanese raised UnicodeEncodeError and the built executable failed its own sanity check:
+
+        UnicodeEncodeError: 'charmap' codec can't encode characters in position 3085-3096
+
+    The whole of 1.3.x printed nothing but ASCII, so this arrived with the voice. Checked here by
+    forcing the encoding through the environment, which is the condition that broke.
+    """
+
+    def _run(self, argv, encoding="cp1252"):
+        env = dict(os.environ, PYTHONIOENCODING=encoding)
+        return subprocess.run([sys.executable, str(SOURCE)] + argv,
+                              capture_output=True, text=True, env=env, encoding="utf-8",
+                              errors="replace")
+
+    def test_the_default_register_survives_cp1252(self):
+        out = self._run(["--help"])
+        self.assertEqual(out.returncode, 0,
+                         "the persona cannot print on a non-UTF-8 console:\n%s"
+                         % (out.stderr or "")[-600:])
+        self.assertNotIn("UnicodeEncodeError", out.stderr or "")
+
+    def test_plain_survives_too_and_stays_ascii(self):
+        out = self._run(["--plain", "--help"])
+        self.assertEqual(out.returncode, 0)
+        self.assertFalse(any(ord(ch) > 127 for ch in out.stdout),
+                         "plain output is not ASCII, so a non-UTF-8 console cannot render it")
+
+    def test_the_no_command_path_survives(self):
+        """This path prints a line from the voice, so it is the shortest reproduction."""
+        out = self._run([])
+        self.assertEqual(out.returncode, 0)
+        self.assertNotIn("UnicodeEncodeError", out.stderr or "")
+
+    def test_a_utf8_console_still_gets_real_japanese(self):
+        """The fix must not degrade the normal case into replacement characters."""
+        out = self._run(["--help"], encoding="utf-8")
+        self.assertEqual(out.returncode, 0)
+        self.assertNotIn("\ufffd", out.stdout,
+                         "the voice arrived as replacement characters on a UTF-8 console")
+        self.assertTrue(any(ord(ch) > 0x2FFF for ch in out.stdout))

@@ -85,7 +85,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.5.0"
+_SOURCE_VERSION = "1.5.1"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -1477,6 +1477,23 @@ def main(argv=None):
     # rather than heating.
     set_nsfw("--nsfw" in raw or _on("NANODESU_NSFW"))
     raw = [a for a in raw if a not in ("--plain", "--nsfw")]
+
+    # The voice is not ASCII, and on Windows `sys.stdout` is bound to the console code page -- cp1252
+    # on a stock CI runner -- so printing it raised UnicodeEncodeError and the built executable failed
+    # its own sanity check. Configured here rather than at import time so that `--plain`, `--json` and
+    # every machine-readable path keeps the stream it would otherwise have had: plain output is what a
+    # script parses, and it must not depend on a persona decision.
+    #
+    # `errors="replace"` rather than `strict`: a character the terminal cannot render must never be
+    # the thing that stops an analysis.
+    if not _PLAIN[0]:                      # the persona may print; for machines it does not
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError, OSError):
+                # A sealed or replaced stream, or an interpreter too old for reconfigure. Printing
+                # ASCII still works, and a pre-3.7 interpreter is not worth failing a scan over.
+                pass
 
     ap = build_parser()
     args = ap.parse_args(raw)
