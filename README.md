@@ -59,6 +59,10 @@ Requires Python 3.9 or newer.
 ## Usage
 
 ```bash
+# what this tool does not do, and one flag that silences the persona
+python nanodesu.py --boundary
+python nanodesu.py --plain info path/to/app.exe
+
 # overview
 python nanodesu.py info    path/to/app.exe
 
@@ -178,10 +182,19 @@ runs in well under a second and needs no sample executable:
 python -m unittest discover -s test -v
 ```
 
-It covers archive parsing, the `extract` → `build` round trip, the `--pyc`
-header handling, contents-directory placement, PYZ extraction, and the error
-paths. The three format details listed under "Three details that break
-everything if changed back" each have a dedicated regression test.
+**141 tests.** It covers archive parsing, the `extract` → `build` round trip, the `--pyc` header
+handling, contents-directory placement, PYZ extraction, the error paths, `neutralize`, and the
+boundary notice. The three format details listed under "Three details that break everything if
+changed back" each have a dedicated regression test.
+
+Two of them are worth naming because they check claims rather than behaviour:
+
+* **The boundary notice's first line is asserted, not trusted.** Every `subprocess.run` call site must
+  pass `-c` with a magic-number query, and the archive under audit must never reach a subprocess. The
+  first draft of that sentence claimed "nothing here creates a process" and the test found it false.
+* **Every `PROSE` entry must be a pair of strings.** One was a bare string, which made `--help` raise
+  `ValueError: too many values to unpack` — broken at the front door, and only for anyone who had not
+  already learned `--plain`.
 
 Continuous integration runs the suite on Linux and Windows across Python
 3.9, 3.12, 3.13 and 3.14 (see `.github/workflows/tests.yml`).
@@ -218,6 +231,54 @@ fails, so none of them is optional.
 3. **Headers prepended by `--pyc` must be stripped on repack**, using the
    per-entry `pyc_header` length from the manifest. Otherwise the marshalled
    code object stored in the archive is corrupted.
+
+## What this tool does not establish
+
+```bash
+python nanodesu.py --boundary
+```
+
+Four lines, and they travel with **every** result — `info` prints them without being asked, and
+`--boundary` lets you read them on purpose:
+
+```
+This tool never executes, loads or launches the archive it reads. The only process it can
+create is a Python interpreter asked for its own bytecode magic number, and only when a .pyc
+header is needed.
+It does NOT address: whether the program is safe, what it does when run, or whether the
+extracted bytes are what its author intended. Extraction reports structure, not intent.
+It reads [the CArchive table of contents, stored entry bytes, and the PYZ]. It is NOT a
+decompiler, NOT a malware detector, and NOT a packer for anything except the archive it
+came from.
+A clean extraction is NOT proof of anything. Specifically: a byte-identical repack proves
+fidelity and not safety; a bare marshalled code object is not source; and content that never
+appears in the table of contents is invisible to this tool entirely.
+```
+
+Each line names a specific thing a reader would otherwise assume. **A general caution gets skimmed;
+"a byte-identical repack proves fidelity and not safety" does not.**
+
+The first line is a claim, so it is **checked rather than worded carefully**: a test walks every
+`subprocess.run` call site and requires each to pass `-c` with a magic-number query, and another
+requires that the archive under audit never reaches a subprocess at all. The first draft of that line
+said "nothing here creates a process" — **and the test written for it found that to be false**, because
+`--pyc` does launch an interpreter to ask for its own magic number. A boundary notice that is untrue
+in its first line is worse than no notice.
+
+## The persona, and the switch that turns it off
+
+`--help` and the no-command path speak as **Lilith** (`PERSONA.md`, `CHARACTER_LILITH.md`). The
+intended register, in short: warm outside, cold when something is lying, and proud of never needing to
+bite — she reads a file without waking it and treats that restraint as an honour rather than a
+limitation.
+
+| | |
+|---|---|
+| **`--plain`** | no persona at all; also `NANODESU_PLAIN=1` |
+| **`--nsfw`** | an adult register, **off unless asked for**; `--plain` overrides it |
+
+Machine-readable output never carries a voice, and the adult register lives in its own document
+(`PERSONA.nsfw.md`) so that someone who wants a security tool is not handed something else.
 
 ## `neutralize` — a defanged variant, not a cure
 
