@@ -116,6 +116,43 @@ NANODESU_PYTHON="C:/tools/python-{ver}/python.exe" python nanodesu.py extract ..
 
 `{ver}` is replaced by the version string, e.g. `3.12`.
 
+## As a library
+
+The commands print prose for a person and return an exit code. That is the right shape for a
+CLI and the wrong shape for a caller — anything that captured that output and parsed it back
+would be coupled to the wording of a report. So there is a small API that returns data instead:
+
+```python
+import nanodesu
+
+nanodesu.inspect_archive("sample.exe")
+# {'entry_count': 836, 'python_version': '3.12', 'stub_size': 382464,
+#  'integrity': [], 'total_uncompressed': 240251704, ...}
+
+nanodesu.list_entries("sample.exe")      # [{'name': 'struct', 'tcode': 'm', ...}, ...]
+nanodesu.read_file("sample.exe", "struct")   # b'...'   (KeyError if there is no such entry)
+nanodesu.verify_archive("sample.exe")    # {'ok': True, 'decompressed': 836, 'problems': []}
+nanodesu.extract("sample.exe", "out/")   # {'ok': True, 'written': 836, 'confined': [], ...}
+```
+
+| function | returns |
+|---|---|
+| `inspect_archive(target)` | the facts `info` prints, as a dict |
+| `list_entries(target)` | the table of contents, in archive order |
+| `read_file(target, name)` | one entry's bytes |
+| `verify_archive(target, read=True)` | what `verify` reports, as data (`read=False` skips decompression) |
+| `extract(target, out_dir, pyc=True, ...)` | a summary, having written a repackable tree |
+
+Where a command would print a message and exit, these raise **`PyInstallerError`** — which
+carries the path it was given — so a caller can tell "this is not an archive" from "this file
+is missing". `read_file` raises `KeyError` for an absent name.
+
+`extract()` writes the same `_archive_manifest.json` the command writes, and the manifest it
+produces is the one `build` accepts: extracting through the API and repacking through the CLI
+round-trips. That is a contract, and a test holds it.
+
+Importing the module prints nothing. Nothing here executes the target.
+
 ## Verified behaviour
 
 Against a 138.8 MB onefile build (PyInstaller 6.x, Python 3.12, PySide6):

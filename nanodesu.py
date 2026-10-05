@@ -67,6 +67,10 @@ COOKIE_FORMAT = "!8sIIII64s"
 COOKIE_LEN = struct.calcsize(COOKIE_FORMAT)          # 88
 TOC_ENTRY_FORMAT = "!IIIIBc"
 TOC_ENTRY_LEN = struct.calcsize(TOC_ENTRY_FORMAT)    # 18
+# Kept in step with pyproject.toml. A caller that loads this module by path -- which is how
+# triage finds it -- has no package metadata to read, so the version has to live in the source.
+VERSION = "1.3.0"
+
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
 
 # How much a single entry is allowed to decompress to, regardless of what the archive declares.
@@ -982,6 +986,228 @@ def cmd_build(root: str, args) -> int:
 
 # --------------------------------------------------------------------------- #
 # CLI
+# --------------------------------------------------------------------------- #
+# Library API
+#
+# Everything above is a command-line program: the cmd_* functions print prose for a person and
+# return an exit code. That is the right shape for a CLI and the wrong shape for a caller, and
+# a caller that wraps it -- capturing stdout and parsing the text back -- is coupled to the
+# wording of a report. Reword a line and the caller breaks.
+#
+# So these functions are built on the pure layer instead (find_archive, read_entry, wrap_pyc,
+# confining), which has always returned data rather than prose. They are not a second
+# implementation of the format: the parsing, decompression and path handling they use are the
+# same functions the commands use.
+#
+# They never execute the target. Nothing in this file creates a process.
+# --------------------------------------------------------------------------- #
+
+__all__ = [
+    # what a caller should reach for
+    "inspect_archive", "list_entries", "read_file", "verify_archive", "extract",
+    "PyInstallerError",
+    # the pieces a caller building on top may legitimately need
+    "find_archive", "read_entry", "wrap_pyc", "Archive", "Entry",
+]
+
+
+class PyInstallerError(Exception):
+    """Raised when an archive cannot be read or an operation cannot be completed.
+
+    The commands convert this kind of condition into a message and an exit code. A caller
+    should get an exception it can catch, with the same explanation attached.
+    """
+
+    def __init__(self, message: str, *, path=None):
+        super().__init__(message)
+        self.path = path
+
+
+def inspect_archive(target) -> dict:
+    """Describe an archive without extracting anything.
+
+    Returns a plain dict -- the same facts `info` prints, minus the formatting.
+    """
+    try:
+        ar = find_archive(Path(target))
+    except SystemExit as exc:
+        raise PyInstallerError(str(exc), path=target) from exc
+    return {
+        "path": str(ar.path),
+        "file_size": ar.file_size,
+        "python_version": ar.pyver_str() if hasattr(ar, "pyver_str") else str(ar.pyver),
+        "pylib": ar.pylib,
+        "stub_size": ar.stub_size,
+        "pkg_len": ar.pkg_len,
+        "base_pos": ar.base_pos,
+        "cookie_pos": ar.cookie_pos,
+        "toc_off": ar.toc_off,
+        "toc_size": ar.toc_size,
+        "entry_count": len(ar.toc),
+        "options": list(ar.options),
+        "integrity": list(ar.integrity),
+        "total_uncompressed": sum(e.usize for e in ar.toc),
+    }
+
+
+def list_entries(target) -> list:
+    """The table of contents, as dicts. Order is the archive's own, which matters for repacking."""
+    try:
+        ar = find_archive(Path(target))
+    except SystemExit as exc:
+        raise PyInstallerError(str(exc), path=target) from exc
+    return [{
+        "name": e.name,
+        "tcode": e.tcode,
+        "compressed": bool(e.cmprs),
+        "stored_size": e.stored_size,
+        "size": e.usize,
+        "offset": e.offset,
+    } for e in ar.toc]
+
+
+def verify_archive(target, *, read=True) -> dict:
+    """Check the table of contents against the file.
+
+    `read=True` decompresses every entry and compares lengths, which is what `verify` does;
+    `read=False` only checks the structure, which is fast and catches a truncated file.
+    """
+    try:
+        ar = find_archive(Path(target))
+    except SystemExit as exc:
+        raise PyInstallerError(str(exc), path=target) from exc
+
+    problems = []
+    checked = 0
+    if read:
+        for e in ar.toc:
+            try:
+                blob = read_entry(ar, e)
+            except Exception as exc:
+                problems.append({"name": e.name, "problem": str(exc)})
+                continue
+            if len(blob) != e.usize:
+                problems.append({"name": e.name,
+                                 "problem": "decompressed to %d bytes, declared %d"
+                                            % (len(blob), e.usize)})
+            else:
+                checked += 1
+    return {
+        "ok": not problems and not ar.integrity,
+        "path": str(ar.path),
+        "entries": len(ar.toc),
+        "decompressed": checked,
+        "problems": problems,
+        "integrity": list(ar.integrity),
+    }
+
+
+def extract(target, out_dir, *, pyc=True, pyc_suffix=True, layout=False,
+            internal_dir="_internal") -> dict:
+    """Unpack an archive into a directory tree with a manifest, and report what happened.
+
+    Writes the same layout the `extract` command writes, including `_archive_manifest.json`,
+    because that manifest is what makes the result repackable. Returns a summary instead of
+    printing one.
+    """
+    try:
+        ar = find_archive(Path(target))
+    except SystemExit as exc:
+        raise PyInstallerError(str(exc), path=target) from exc
+
+    out_root = Path(out_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    if layout:
+        found = ""
+        for opt in ar.options:
+            parts = opt.split()
+            if len(parts) >= 2 and parts[0] == "pyi-contents-directory":
+                found = parts[1]
+                break
+        internal_dir = found or internal_dir
+
+    magic = pyc_magic_for(ar) if pyc else None
+    magic_states = (TC_MODULE, TC_MODULE_DEP, TC_SOURCE)
+    written, failed, confined = [], [], []
+
+    for e in ar.toc:
+        try:
+            blob = read_entry(ar, e, verify_len=False)
+        except Exception as exc:
+            failed.append({"name": e.name, "problem": str(exc)})
+            continue
+
+        rel = layout_path(e, internal_dir) if layout else Path(flat_name(e))
+        if pyc_suffix and e.tcode in magic_states and not rel.name.endswith(".pyc"):
+            rel = rel.with_name(rel.name + ".pyc")
+        header = 0
+        if magic is not None and e.tcode in magic_states:
+            blob = wrap_pyc(blob, magic)
+            header = PYC_HEADER_LEN
+
+        safe_rel = confining(out_root, rel, e.name)
+        if safe_rel.as_posix() != rel.as_posix():
+            confined.append({"name": e.name, "placed_at": safe_rel.as_posix()})
+        dest = out_root / safe_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(blob)
+        written.append({"name": e.name, "path": safe_rel.as_posix(), "size": len(blob),
+                        "pyc_header": header,
+                        # the entry this came from, kept alongside rather than re-paired later
+                        "tcode": e.tcode, "cmprs": e.cmprs, "usize": e.usize})
+
+    # The manifest is built from what was actually written, in the archive's order, so a
+    # repack cannot disagree with the extraction -- the class of bug that made a second pass
+    # over the paths a bad idea.
+    manifest = {
+        "source": str(ar.path),
+        "python": ar.pyver_str() if hasattr(ar, "pyver_str") else str(ar.pyver),
+        "pylib": ar.pylib,
+        "pkg_len": ar.pkg_len,
+        "toc_off": ar.toc_off,
+        "options": list(ar.options),
+        "internal_dir": internal_dir,
+        "stub": "",
+        "integrity": list(ar.integrity),
+        "entries": [{"name": w["name"], "tcode": w["tcode"], "cmprs": w["cmprs"],
+                     "usize": w["usize"], "rel": w["path"], "safe_rel": w["path"],
+                     "confined": False, "pyc_header": w["pyc_header"]}
+                    for w in written],
+    }
+
+    with open(ar.path, "rb") as fh:
+        stub = fh.read(ar.base_pos)
+    stub_path = out_root / (ar.path.stem + ".stub")
+    stub_path.write_bytes(stub)
+    manifest["stub"] = stub_path.name
+    (out_root / "_archive_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    return {
+        "ok": not failed,
+        "out_dir": str(out_root),
+        "written": len(written),
+        "failed": failed,
+        "confined": confined,
+        "stub": stub_path.name,
+        "manifest": "_archive_manifest.json",
+        "executed": False,
+    }
+
+
+def read_file(target, name: str) -> bytes:
+    """The bytes of one entry, by exact name. Raises KeyError if there is no such entry."""
+    try:
+        ar = find_archive(Path(target))
+    except SystemExit as exc:
+        raise PyInstallerError(str(exc), path=target) from exc
+    for e in ar.toc:
+        if e.name == name:
+            return read_entry(ar, e)
+    raise KeyError("no entry named %r in %s" % (name, ar.path))
+
+
 # --------------------------------------------------------------------------- #
 
 def build_parser():
