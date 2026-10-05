@@ -30,3 +30,28 @@ this frame. No Qt is required to exercise the logic:
 ```bash
 python charlayer.py
 ```
+
+## format_matrix.py
+
+Regenerates `FORMAT_MATRIX.md` from PyInstaller's own sources. Fetches the sdists for a list of
+versions from PyPI (cached under `PYINSTALLER_SRC_CACHE`, default `~/.cache/pyinstaller-src`) and
+reads the constants a reader would be written against: `_TOC_ENTRY_FORMAT`, the cookie format, and
+the `ARCHIVE_ITEM_*` type codes.
+
+```bash
+python tools/format_matrix.py
+```
+
+## Why this source is written in English, and stripped of paths
+
+An earlier state of this project was written in Chinese with the author's own directory layout in
+it — absolute paths, a named personal workspace, a named project. A one-off script rewrote the
+source: translated the prose, removed the paths, and dropped references to other projects.
+
+**That script is not kept here**, for two reasons. It hard-coded the path of a source tree that no
+longer exists, so it would not run; and its job cannot be done twice — the canonical source is
+already in the state it produced, and running it again would be a no-op at best.
+
+What replaced it is process rather than tooling: CI builds and publishes on a tag, and
+`test_version.py` keeps the version from drifting. The reason the code reads as it does is recorded
+here, which is the part that was actually worth keeping.
