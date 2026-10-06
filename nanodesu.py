@@ -90,7 +90,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.7.1"
+_SOURCE_VERSION = "1.7.2"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -180,6 +180,51 @@ class Archive:
     @property
     def stub_size(self) -> int:
         return self.base_pos
+
+    @property
+    def archive_end(self) -> int:
+        """Where the PyInstaller archive stops, as an absolute file offset.
+
+        The cookie is 88 bytes and sits immediately after the package payload it describes, so the
+        archive ends exactly where the cookie does. Anything past this point is **not part of the
+        archive**.
+        """
+        return self.cookie_pos + COOKIE_LEN
+
+    @property
+    def overlay_size(self) -> int:
+        """Bytes appended after the archive, which the archive format does not describe.
+
+        **This was previously invisible, and it is the wrong thing to be invisible.** A PyInstaller
+        build does not normally leave anything here -- so when something is here, it was put there on
+        purpose, and the usual reasons are a second payload, a configuration blob, or an encrypted
+        stage. A reader told "this is a PyInstaller archive" has been told about the envelope and
+        nothing about the extra weight taped to it.
+        """
+        return max(0, self.file_size - self.archive_end)
+
+    @property
+    def has_overlay(self) -> bool:
+        return self.overlay_size > 0
+
+    def overlay_facts(self) -> dict:
+        """The overlay as a first-class fact.
+
+        Names the region and its extent without interpreting it, because interpreting it would be a
+        claim this parser cannot support -- but **not mentioning it at all was the larger error**.
+        """
+        out = {
+            "archive_end": self.archive_end,
+            "file_size": self.file_size,
+            "overlay_size": self.overlay_size,
+            "has_overlay": self.has_overlay,
+        }
+        if self.has_overlay:
+            out["note"] = ("%d byte(s) follow the end of the archive. PyInstaller does not write there "
+                           "itself, so the region was added deliberately -- it often holds a second "
+                           "payload, a configuration blob or an encrypted stage. This tool does not "
+                           "interpret it." % self.overlay_size)
+        return out
 
     @property
     def total_payload(self) -> int:
@@ -525,6 +570,15 @@ def cmd_info(ar: Archive, args) -> int:
     print("TOC         : %#x, %s, %d entries"
           % (ar.toc_off, human(ar.toc_size), len(ar.toc)))
     print("payload     : %s uncompressed in total" % human(ar.total_payload))
+    # **Reported even at zero, because "none" is the answer to a question somebody asked.** And when
+    # it is not zero it is the most interesting line here: the archive format does not write past its
+    # own cookie, so anything there was added on purpose.
+    if ar.has_overlay:
+        print("overlay     : %s  (archive ends at %#x, file ends at %#x)"
+              % (human(ar.overlay_size), ar.archive_end, ar.file_size))
+        print("              %s" % ar.overlay_facts()["note"])
+    else:
+        print("overlay     : none  (the archive ends where the file does)")
     if ar.options:
         print("OPTION      : %s" % ", ".join(ar.options))
     print()

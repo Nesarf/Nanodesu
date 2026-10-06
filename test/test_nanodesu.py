@@ -18,6 +18,8 @@ import sys
 import tempfile
 import unittest
 import zlib
+import shutil
+import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -378,3 +380,65 @@ class TestHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+class TestOverlayIsAFirstClassFact(unittest.TestCase):
+    """Bytes appended after the archive used to be invisible.
+
+    **PyInstaller does not write past its own cookie**, so anything there was put there deliberately
+    -- and the usual reasons are a second payload, a configuration blob, or an encrypted stage. A
+    reader told "this is a PyInstaller archive" was told about the envelope and nothing about the
+    extra weight taped to it.
+    """
+
+    def _archive(self, extra=b""):
+        tmp = Path(tempfile.mkdtemp(prefix="ov-"))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        path = tmp / "sample.exe"
+        make_archive(path, [("a.txt", "x", b"payload-aaa", True)])
+        if extra:
+            with path.open("ab") as fh:
+                fh.write(extra)
+        return nano.find_archive(path)
+
+    def test_a_clean_archive_reports_no_overlay(self):
+        ar = self._archive()
+        self.assertFalse(ar.has_overlay)
+        self.assertEqual(ar.overlay_size, 0)
+        facts = ar.overlay_facts()
+        self.assertFalse(facts["has_overlay"])
+        self.assertNotIn("note", facts, "a note about an overlay that is not there is noise")
+
+    def test_appended_bytes_are_measured_and_named_as_region(self):
+        ar = self._archive(b"SECOND-PAYLOAD" * 16)
+        self.assertTrue(ar.has_overlay)
+        self.assertEqual(ar.overlay_size, 14 * 16)
+        facts = ar.overlay_facts()
+        self.assertEqual(facts["overlay_size"], 14 * 16)
+        self.assertEqual(facts["archive_end"] + facts["overlay_size"], facts["file_size"])
+
+    def test_it_says_what_it_will_not_claim(self):
+        """Measuring the region is a fact; saying what is in it is not. The note has to carry that."""
+        facts = self._archive(b"x" * 512).overlay_facts()
+        note = facts["note"]
+        self.assertIn("does not", note)
+        self.assertIn("interpret", note)
+        # And it names the plausible reasons without asserting one.
+        for word in ("payload", "configuration", "encrypted"):
+            self.assertIn(word, note)
+
+    def test_the_archive_end_is_where_the_cookie_ends(self):
+        ar = self._archive(b"x" * 32)
+        self.assertEqual(ar.archive_end, ar.cookie_pos + 88)
+
+    def test_info_prints_the_line_either_way(self):
+        """Reported even at zero: "none" is an answer to a question somebody asked."""
+        tmp = Path(tempfile.mkdtemp(prefix="ov-"))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        path = tmp / "sample.exe"
+        make_archive(path, [("a.txt", "x", b"p", True)])
+        out = subprocess.run([sys.executable, str(nano.__file__), "info", str(path)],
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("overlay", out.stdout)
+        self.assertIn("none", out.stdout)
