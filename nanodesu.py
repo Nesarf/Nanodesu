@@ -90,7 +90,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.7.3"
+_SOURCE_VERSION = "1.7.4"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -479,11 +479,18 @@ def _magic_for(ver_str: str):
                               if "." in ver_str else ver_str[:2])
         except (KeyError, IndexError):
             continue
-        if not os.path.exists(exe):
-            found = shutil.which(exe)          # a bare name may live on PATH
-            if not found:
-                continue
-            exe = found
+        # **A bare name is not resolved.** `shutil.which` used to run here, so an archive's own version
+        # string decided which executable this tool would start -- and the archive is the untrusted
+        # input. PATH is not ours, so the lookup is gone and only a path that names a file is accepted.
+        #
+        # What is given up is small: the built-in table covers 3.7-3.14, so this only affects reading
+        # the exact magic for a version the table does not know. `NANODESU_PYTHON` still works and is
+        # the supported way to say where an interpreter lives, precisely because naming it is a
+        # decision a person makes rather than one a file makes.
+        if not os.path.isabs(exe):
+            continue
+        if not os.path.isfile(exe):
+            continue
         try:
             out = subprocess.run(
                 [exe, "-c", "import importlib.util;print(importlib.util.MAGIC_NUMBER.hex())"],
@@ -538,6 +545,14 @@ def flat_name(e: Entry) -> str:
     return "%s__%s" % (e.tname.replace("(", "_").replace(")", ""), safe)
 
 
+# Windows device names, which are not files at all. Built from a list of integers and names
+# rather than written with escapes, because shell heredocs have mangled those here repeatedly.
+DEVICE_NAMES = frozenset(
+    ["CON", "PRN", "AUX", "NUL"]
+    + ["COM%d" % i for i in range(1, 10)]
+    + ["LPT%d" % i for i in range(1, 10)])
+
+
 def confining(
     out_root: Path,
     rel: Path,
@@ -567,8 +582,27 @@ def confining(
             continue
         piece = re.sub(r'[\\/:*?"<>|]', "_", piece)
         piece = piece.strip(" .")
-        if piece:
-            parts.append(piece)
+        if not piece:
+            continue
+        # **Device names are not filenames.** `NUL`, `CON`, `PRN`, `AUX`, `COM1`-`COM9` and
+        # `LPT1`-`LPT9` address devices on Windows, so writing to one either fails or does not create a
+        # file at all -- and an extraction that reports a member as written while nothing was created is
+        # worse than a refusal, because the report is what the operator keeps.
+        #
+        # **Prefixed rather than replaced, and only the collision that matters is escaped.** A
+        # replacement would map `NUL` and `_NUL` onto one name, and a rename that merges two entries
+        # quietly rewrites the archive's structure. But escaping *every* leading underscore breaks
+        # ordinary names, and a test caught that too.
+        #
+        # So: a name whose stem is a device name gets a prefix, and one that already carries exactly that
+        # prefix is left alone. **The ambiguity is confined to `_NUL`-shaped entries**, which is a narrow
+        # enough case to state rather than to solve -- the alternative repairs names nobody has.
+        stem = piece.split(".", 1)[0].upper()
+        if stem in DEVICE_NAMES:
+            piece = "_" + piece
+        elif stem.lstrip("_") in DEVICE_NAMES:
+            pass          # already disambiguated by its own leading underscores
+        parts.append(piece)
     clamped = Path(*parts) if parts else Path("_unnamed")
     return clamped
 

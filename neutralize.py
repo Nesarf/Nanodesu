@@ -79,7 +79,18 @@ def find_interpreter(version: str):
     candidates.append(sys.executable)
     seen = set()
     for cand in candidates:
-        if cand in seen or not Path(cand).is_file():
+        if cand in seen:
+            continue
+        # **Absolute paths only.** A bare `python3.12` runs whatever the PATH resolves it to, and PATH is
+        # not ours -- so an archive's own version string could decide which executable this tool starts.
+        # Nothing about the archive gets to choose a program that runs.
+        #
+        # The cost of refusing is small and bounded: the built-in table already covers 3.7-3.14, and its
+        # only weakness is being coarser than the interpreter itself. So the table is the default and a
+        # launched interpreter is opt-in, by naming its path.
+        if not Path(cand).is_absolute():
+            continue
+        if not Path(cand).is_file():
             continue
         seen.add(cand)
         try:

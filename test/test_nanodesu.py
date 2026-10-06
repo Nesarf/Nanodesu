@@ -494,3 +494,87 @@ class TestTheCapsAreThreeAndOneOfThemWasMissing(unittest.TestCase):
 
     def test_the_default_is_not_lifted(self):
         self.assertFalse(nano._allow_huge())
+
+
+class TestDeviceNamesAreNotFilenames(unittest.TestCase):
+    """`NUL`, `CON`, `COM1` and friends address devices on Windows.
+
+    Writing to one either fails or does not create a file at all -- and **an extraction that reports a
+    member as written while nothing was created is worse than a refusal**, because the report is what
+    the operator keeps.
+    """
+
+    def test_a_device_name_is_prefixed(self):
+        for name, expect in (("NUL", "_NUL"), ("con", "_con"), ("COM1", "_COM1"),
+                             ("CON.txt", "_CON.txt"), ("nul.dat", "_nul.dat")):
+            with self.subTest(name=name):
+                out = nano.confining(Path("."), Path(name), name)
+                self.assertEqual(str(out), expect)
+
+    def test_ordinary_names_come_through_distinct(self):
+        """The rename that matters is the one applied to a name that is *not* already prefixed.
+
+        A prefix maps `NUL` onto `_NUL`. `_NUL` is itself a legal filename and reaches the same place,
+        so the two collide -- **and the first version of this function escaped every leading underscore
+        to fix that, which broke ordinary names.** A test caught that, so the escaping is confined to
+        device names and the one remaining ambiguity is stated rather than solved: it requires an
+        archive holding both `NUL` and `_NUL`, and repairing names nobody has is the worse trade.
+        """
+        mapped = {}
+        for name in ("a.txt", "b.txt", "lib/x.pyc", "CON", "PRN", "AUX", "COM1", "LPT1"):
+            out = str(nano.confining(Path("."), Path(name), name))
+            with self.subTest(name=name):
+                self.assertNotIn(out, mapped, "%s and %s both map to %s" % (mapped.get(out), name, out))
+            mapped[out] = name
+
+    def test_the_documented_ambiguity_is_the_only_one(self):
+        """`_NUL` and `NUL` map alike, and that is written down rather than discovered later."""
+        self.assertEqual(str(nano.confining(Path("."), Path("NUL"), "NUL")), "_NUL")
+        self.assertEqual(str(nano.confining(Path("."), Path("_NUL"), "_NUL")), "_NUL")
+
+    def test_an_ordinary_name_is_untouched(self):
+        for name in ("a.txt", "lib/site.pyc", "weird?name", "trailing. "):
+            with self.subTest(name=name):
+                out = str(nano.confining(Path("."), Path(name), name))
+                if name == "trailing. ":
+                    self.assertNotIn(" ", out.rstrip("\/"))
+                else:
+                    self.assertTrue(out)
+
+    def test_the_traversal_defences_are_still_there(self):
+        """The device rule is an addition, not a replacement for what already worked."""
+        self.assertEqual(str(nano.confining(Path("."), Path(".."), "..")), "_unnamed")
+        self.assertNotIn(":", str(nano.confining(Path("."), Path("C:/x"), "C:/x")))
+
+
+class TestNoBareNameIsEverRun(unittest.TestCase):
+    """An archive's own version string used to decide which executable this tool would start.
+
+    `shutil.which` resolved a bare `python3.12` off PATH and the result was executed. PATH is not ours,
+    so the untrusted input was choosing a program to run. **Nothing about the archive gets to choose
+    that.**
+    """
+
+    def test_the_source_no_longer_resolves_a_bare_name(self):
+        for name in ("nanodesu.py", "neutralize.py"):
+            src = (Path(__file__).resolve().parent.parent / name).read_text(encoding="utf-8")
+            with self.subTest(file=name):
+                # The only occurrence may be the comment explaining its removal.
+                for line in src.splitlines():
+                    if "shutil.which(" in line:
+                        self.assertTrue(line.strip().startswith("#"),
+                                        "%s still calls shutil.which: %s" % (name, line.strip()))
+
+    def test_a_bare_template_is_refused(self):
+        import tempfile
+        # A version the table knows, so the answer comes from the table and nothing is launched.
+        magic = nano._magic_for("3.12")
+        self.assertIsNotNone(magic, "the built-in table no longer covers 3.12")
+        self.assertEqual(len(magic), 4)
+
+    def test_the_table_is_what_makes_refusing_affordable(self):
+        """Refusing to launch would be expensive if the table were thin -- it would lose the exact magic
+        for many versions. It covers 3.7 through 3.14, which is why the refusal costs almost nothing."""
+        for ver in ("3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"):
+            with self.subTest(version=ver):
+                self.assertIn(ver, nano.PYC_MAGIC_BY_VER)
