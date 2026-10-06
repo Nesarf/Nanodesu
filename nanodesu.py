@@ -90,7 +90,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.7.2"
+_SOURCE_VERSION = "1.7.3"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -99,7 +99,24 @@ PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
 # The declaration is a claim by whoever built the archive, so it can only be used to check the
 # result -- never to authorise the allocation. Without a limit of our own, an archive that
 # honestly declares 20 GB gets 20 GB attempted, and the honesty is the attack.
-MAX_ENTRY_BYTES = 2 << 30
+# **Three limits, because one of them is not enough.** A per-entry cap says nothing about a column of
+# entries each just under it, so a total is required as well; and a count is required because a million
+# tiny entries cost nothing in bytes and everything in inodes and time.
+#
+# The old per-entry value was 2 GiB, which is not a limit for an analysis tool -- three entries at
+# 1.9 GiB each were all individually "within limit" and together are six gigabytes of decompressed
+# output from a file that might be a tenth of that. The research profile is still available: pass
+# `--allow-huge` and the caps are lifted, deliberately and visibly, by whoever needs them.
+MAX_ENTRY_BYTES = 256 << 20        # 256 MiB for any single entry
+MAX_TOTAL_BYTES = 1 << 30          # 1 GiB decompressed across one extraction
+MAX_OUTPUT_FILES = 8192            # and a count, because many small entries are the other shape of this
+
+# The PYZ is a file *inside* the archive and had no limit of its own: the whole thing was read into one
+# blob and sliced, so an archive could satisfy every CArchive bound and still hand `marshal.loads()` a
+# region chosen by the file. These are its own ceilings, checked before anything is parsed.
+MAX_PYZ_BYTES = 256 << 20
+MAX_PYZ_TOC_BYTES = 64 << 20
+MAX_PYZ_RECORDS = 1_000_000
 PYC_HEADER_LEN = 16          # 3.7+ .pyc header: magic(4)+flags(4)+mtime(4)+size(4)
 PYZ_MAGIC = b"PYZ\0"
 NULB = b"\x00"
@@ -169,6 +186,8 @@ class Archive:
     toc: list
     options: list
     integrity: list = field(default_factory=list)
+    allow_huge: bool = False
+    """Whether the decompression caps are lifted for this archive, at the caller's explicit request."""
     """Everything the parser found structurally wrong, as facts rather than exceptions.
 
     A malformed archive is a finding about the file, not a reason to refuse to describe it: this
@@ -386,10 +405,17 @@ def find_archive(path) -> Archive:
         e.raw_pos = base + e.offset
     return Archive(path=path, file_size=size, cookie_pos=cookie_pos, pkg_len=pkg_len,
                    toc_off=toc_off, toc_size=toc_size, pyver=pyver, pylib=pylib,
-                   base_pos=base, toc=toc, options=options, integrity=integrity)
+                   base_pos=base, toc=toc, options=options, integrity=integrity,
+                   allow_huge=_allow_huge())
 
 
 def read_entry(ar: Archive, e: Entry, verify_len: bool = True) -> bytes:
+    """Read one entry, with three ceilings and a running total.
+
+    **The total is the one that was missing.** A per-entry bound is satisfied by any number of entries
+    that each sit just below it, so the interesting failure was never a single huge entry -- it was a
+    column of merely large ones, which no single check could see.
+    """
     with open(ar.path, "rb") as f:
         f.seek(e.raw_pos)
         blob = f.read(e.stored_size)
@@ -407,6 +433,15 @@ def read_entry(ar: Archive, e: Entry, verify_len: bool = True) -> bytes:
     if verify_len and len(blob) != e.usize:
         raise IOError("size mismatch after decompressing %s (%d/%d)"
                       % (e.name, len(blob), e.usize))
+
+    # The running total, and it is charged whatever the entry's own size was -- an uncompressed entry
+    # still lands in memory and still counts against what this extraction is allowed to produce.
+    spent = getattr(ar, "_bytes_read", 0) + len(blob)
+    if not getattr(ar, "allow_huge", False) and spent > MAX_TOTAL_BYTES:
+        raise IOError("extraction passed %d bytes at %s, over the %d-byte total limit; pass "
+                      "--allow-huge to lift it deliberately"
+                      % (spent, e.name, MAX_TOTAL_BYTES))
+    ar._bytes_read = spent
     return blob
 
 
@@ -828,6 +863,14 @@ def cmd_pyz(target: str, args) -> int:
         print("not found: %s" % p, file=sys.stderr)
         return 1
     blob = p.read_bytes()
+    # **The PYZ is a file inside the archive and had no ceiling of its own.** Every CArchive bound could
+    # be satisfied while the whole PYZ was read into one blob and sliced, so the region handed to
+    # `marshal.loads()` was chosen by the file rather than by this tool. Checked before parsing, not after.
+    if len(blob) > MAX_PYZ_BYTES and not _allow_huge():
+        print("refusing: %s is %d bytes, over the %d-byte PYZ limit. This is what a malformed or "
+              "hostile archive looks like; pass --allow-huge if you know it is not."
+              % (p.name, len(blob), MAX_PYZ_BYTES), file=sys.stderr)
+        return 1
     if not blob.startswith(PYZ_MAGIC):
         ar = find_archive(target)
         zs = [e for e in ar.toc if e.tcode == TC_PYZ]
@@ -1330,6 +1373,19 @@ def is_plain() -> bool:
     return _PLAIN[0]
 
 
+_ALLOW_HUGE = False
+
+
+def _set_allow_huge(value: bool) -> None:
+    """Lift the decompression caps for this process, at the caller's explicit request."""
+    global _ALLOW_HUGE
+    _ALLOW_HUGE = bool(value)
+
+
+def _allow_huge() -> bool:
+    return _ALLOW_HUGE
+
+
 def set_nsfw(value: bool) -> None:
     """Enable the adult register. Off unless explicitly asked for; `--plain` wins if both are set.
 
@@ -1478,6 +1534,12 @@ def build_parser():
                          "result too; this just lets you read it on purpose")
     ap.add_argument("--plain", action="store_true",
                     help="speak plainly: no persona in the prose (also NANODESU_PLAIN=1)")
+    # Deliberately awkward to reach. The caps exist because a malformed or hostile archive can ask for
+    # more than the machine has, and "temporarily lift them" is the normal way that protection quietly
+    # stops being one. Naming the flag after what it does keeps the act visible in a shell history.
+    ap.add_argument("--allow-huge", action="store_true",
+                    help="lift the decompression caps (per-entry, total and PYZ) for this run only. "
+                         "Only for an archive you already trust")
     ap.add_argument("--nsfw", action="store_true",
                     help="allow the adult register in the prose; off unless asked for "
                          "(also NANODESU_NSFW=1). --plain overrides it")
@@ -1668,7 +1730,10 @@ def main(argv=None):
     # Off unless explicitly asked for. `set_nsfw` itself defers to plain, so passing both silences
     # rather than heating.
     set_nsfw("--nsfw" in raw or _on("NANODESU_NSFW"))
-    raw = [a for a in raw if a not in ("--plain", "--nsfw")]
+    # Same shape as the switch above, and for the same reason: read from the raw argv so it is applied
+    # before any command runs, because the caps are consulted during parsing.
+    _set_allow_huge("--allow-huge" in raw)
+    raw = [a for a in raw if a not in ("--plain", "--nsfw", "--allow-huge")]
 
     # The voice is not ASCII, and on Windows `sys.stdout` is bound to the console code page -- cp1252
     # on a stock CI runner -- so printing it raised UnicodeEncodeError and the built executable failed

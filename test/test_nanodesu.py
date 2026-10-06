@@ -12,6 +12,7 @@ that silently produce a broken repack are at the bottom.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import struct
 import sys
@@ -442,3 +443,54 @@ class TestOverlayIsAFirstClassFact(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("overlay", out.stdout)
         self.assertIn("none", out.stdout)
+
+
+class TestTheCapsAreThreeAndOneOfThemWasMissing(unittest.TestCase):
+    """A per-entry bound is satisfied by any number of entries that each sit just below it.
+
+    The old value was 2 GiB, which is not a limit for an analysis tool: three entries at 1.9 GiB were
+    each individually "within limit" and together are six gigabytes of decompressed output from a file
+    that might be a tenth of that size. **The interesting failure was never one huge entry -- it was a
+    column of merely large ones, which no single check could see.**
+    """
+
+    def test_the_per_entry_cap_is_an_analysis_tool_value(self):
+        self.assertLessEqual(nano.MAX_ENTRY_BYTES, 512 << 20,
+                             "a cap above half a gigabyte is not a cap for this kind of tool")
+
+    def test_there_is_a_total_and_a_count(self):
+        self.assertTrue(hasattr(nano, "MAX_TOTAL_BYTES"))
+        self.assertTrue(hasattr(nano, "MAX_OUTPUT_FILES"))
+        self.assertLess(nano.MAX_TOTAL_BYTES, 8 << 30)
+
+    def test_the_total_is_charged_for_every_entry_read(self):
+        """An uncompressed entry still lands in memory and still counts."""
+        import inspect
+        body = inspect.getsource(nano.read_entry)
+        self.assertIn("_bytes_read", body)
+        # Charged after the length check, so the entry itself is still verified first.
+        self.assertLess(body.index("size mismatch"), body.index("_bytes_read"))
+
+    def test_the_pyz_has_its_own_ceilings(self):
+        """**The PYZ is a file inside the archive and had no limit of its own.** Every CArchive bound
+        could be satisfied while the whole thing was read into one blob and sliced, so the region handed
+        to `marshal.loads()` was chosen by the file rather than by this tool.
+        """
+        for name in ("MAX_PYZ_BYTES", "MAX_PYZ_TOC_BYTES", "MAX_PYZ_RECORDS"):
+            with self.subTest(constant=name):
+                self.assertTrue(hasattr(nano, name), "%s is missing" % name)
+        body = inspect.getsource(nano.cmd_pyz)
+        self.assertIn("MAX_PYZ_BYTES", body)
+        # Checked before parsing, not after.
+        self.assertLess(body.index("MAX_PYZ_BYTES"), body.index("PYZ_MAGIC"))
+
+    def test_lifting_the_caps_is_explicit_and_named_after_what_it_does(self):
+        src = (Path(__file__).resolve().parent.parent / "nanodesu.py").read_text(encoding="utf-8")
+        self.assertIn("--allow-huge", src)
+        self.assertIn("Only for an archive you already trust", src)
+        # And it is stripped from argv like the other switches, so it never reaches argparse.
+        flat = " ".join(src.split())
+        self.assertIn('not in ("--plain", "--nsfw", "--allow-huge")', flat)
+
+    def test_the_default_is_not_lifted(self):
+        self.assertFalse(nano._allow_huge())
