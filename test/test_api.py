@@ -205,7 +205,7 @@ class TestItStaysALibraryOnDisk(unittest.TestCase):
                 "m=importlib.util.module_from_spec(s);"
                 "sys.modules['n']=m;s.loader.exec_module(m)"
                 % str(HERE.parent / "nanodesu.py"))
-        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout, "", "importing the module wrote to stdout: %r" % r.stdout[:200])

@@ -108,21 +108,21 @@ class TestTheVoiceCanBeSilenced(unittest.TestCase):
         """Checked through a real subprocess, because the variable is read in main()."""
         env = dict(os.environ, NANODESU_PLAIN="1")
         out = subprocess.run([sys.executable, str(SOURCE), "--help"],
-                             capture_output=True, text=True, env=env)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         self.assertEqual(out.returncode, 0)
         self.assertFalse(any(ord(ch) > 0x2FFF for ch in out.stdout),
                          "NANODESU_PLAIN=1 still printed the voice")
 
     def test_plain_reaches_the_help_text(self):
         out = subprocess.run([sys.executable, str(SOURCE), "--plain", "--help"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(out.returncode, 0)
         self.assertFalse(any(ord(ch) > 0x2FFF for ch in out.stdout),
                          "--plain still printed the voice")
 
     def test_the_help_text_without_plain_contains_her(self):
         out = subprocess.run([sys.executable, str(SOURCE), "--help"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(out.returncode, 0)
         self.assertTrue(any(ord(ch) > 0x2FFF for ch in out.stdout),
                         "the default register printed no voice at all")
@@ -243,12 +243,12 @@ class TestTheAdultRegisterIsGatedOff(unittest.TestCase):
     def test_the_environment_variable_is_honoured(self):
         env = dict(os.environ, NANODESU_NSFW="1")
         out = subprocess.run([sys.executable, str(SOURCE), "--help"],
-                             capture_output=True, text=True, env=env)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         self.assertEqual(out.returncode, 0)
 
     def test_both_flags_together_is_not_an_error(self):
         out = subprocess.run([sys.executable, str(SOURCE), "--plain", "--nsfw", "--help"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(out.returncode, 0)
         self.assertFalse(any(ord(ch) > 0x2FFF for ch in out.stdout),
                          "--plain --nsfw printed a persona")

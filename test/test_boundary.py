@@ -94,8 +94,13 @@ class TestItTravelsWithResults(unittest.TestCase):
 
 class TestTheCliExposesIt(unittest.TestCase):
     def test_the_boundary_flag_prints_it_and_exits_zero(self):
+        # **`encoding="utf-8"`, not `text=True` alone.** The notice carries persona text, which is
+        # not ASCII, and Windows decodes a child's output with the system code page -- cp1252 on the CI
+        # runner, which raised UnicodeDecodeError on a byte that is a valid UTF-8 continuation. That is
+        # a property of the harness rather than of the tool, and it made the suite locale-dependent.
         out = subprocess.run([sys.executable, str(NANODESU), "--boundary"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace")
         self.assertEqual(out.returncode, 0)
         self.assertIn("never executes", out.stdout)
         self.assertIn("Python interpreter", out.stdout)
