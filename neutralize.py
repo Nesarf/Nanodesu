@@ -50,6 +50,10 @@ INTERPRETER_HINTS = (
 # before a malformed archive was written. Reading the constant off a real PYZ is why the number is
 # right; a wrong one produces a file that no extractor can open.
 PYZ_MAGIC = b"PYZ" + bytes(1)
+# The record's format version. **Both repositories must write the same number**, or the cross-tool
+# consistency assertion has nothing to align on -- see ACTION_CONTRACT.md.
+RECORD_VERSION = 1
+
 PYZ_HEADER_LEN = 17
 
 
@@ -315,6 +319,8 @@ def neutralize(archive: Path, tree: Path, *, modules, pyc_header: int = 16,
     stub_check = check_stub(stub_blob, interpreter)
 
     record = {
+        "record_version": RECORD_VERSION,
+        "action": "neutralize",
         "source_archive": str(archive),
         "tree": str(tree),
         "dry_run": bool(dry_run),
@@ -377,7 +383,69 @@ def neutralize(archive: Path, tree: Path, *, modules, pyc_header: int = 16,
     matched = [r for r in record["replaced"] if r.get("matched", True)]
     record["summary"] = {"replaced": len(matched),
                          "note": "%d module(s) replaced with an inert stub" % len(matched)}
+
+    # **Constraint 4's sentence turned into evidence.** The caveat says the rest of the file "was not
+    # otherwise altered" -- and nothing checked that. It was guaranteed by the author's care rather
+    # than by anything a reader could run. Comparing the tree after the rewrite against the archive
+    # it came from turns the strongest claim this action makes into something checkable.
+    record.update(verify_untouched(archive, tree, replaced_names={
+        r.get("name") for r in matched if r.get("name")}))
     return record
+
+
+def verify_untouched(archive: Path, tree: Path, *, replaced_names: set) -> dict:
+    """Which entries are byte-identical to the original, and which changed besides the targets.
+
+    Reads both the archive and the tree, hashes every entry's bytes, and reports the comparison. The
+    targets are expected to differ; **anything else that differs means this output is not a
+    one-place change**, and the record has to say so rather than leave the claim standing.
+
+    Never raises: a failure to compare is reported as `unverifiable` with the reason, because a broken
+    comparison must not read as a clean one.
+    """
+    try:
+        import nanodesu as nd
+        original = {}
+        # `find_archive` -- **not `open_archive`**, which does not exist. The first version of this
+        # called a function that was never there, and because this helper never raises, the mistake
+        # surfaced as "unverifiable" rather than as an error. That is the failure mode this whole
+        # module is arranged against, so the API is asserted rather than assumed.
+        ar = nd.find_archive(archive)
+        for entry in ar.toc:
+            try:
+                original[entry.name] = hashlib.sha256(nd.read_entry(ar, entry)).hexdigest()
+            except Exception:                                      # noqa: BLE001
+                original[entry.name] = None
+    except BaseException as exc:                                   # noqa: BLE001
+        # **`BaseException`, not `Exception`.** `find_archive` exits rather than raising when the file
+        # is not an archive, and `SystemExit` derives from `BaseException` -- so the first version's
+        # promise never to raise was false, and it surfaced as a `SystemExit` escaping a helper whose
+        # whole purpose is to report failure as data.
+        return {"entries_unchanged": None, "entries_changed": [],
+                "untouched_verified": False,
+                "untouched_unverifiable": "the original could not be read back: %s" % exc}
+
+    same, changed = 0, []
+    for name, before in original.items():
+        if name in replaced_names:
+            continue
+        path = Path(tree) / name
+        if not path.is_file():
+            changed.append({"name": name, "why": "absent from the rewritten tree"})
+            continue
+        try:
+            after = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            changed.append({"name": name, "why": "unreadable: %s" % exc})
+            continue
+        if before is None:
+            changed.append({"name": name, "why": "the original entry could not be read"})
+        elif before == after:
+            same += 1
+        else:
+            changed.append({"name": name, "why": "bytes differ from the original",
+                            "before_sha256": before, "after_sha256": after})
+    return {"entries_unchanged": same, "entries_changed": changed, "untouched_verified": True}
 
 
 def write_record(record: dict, tree: Path) -> Path:

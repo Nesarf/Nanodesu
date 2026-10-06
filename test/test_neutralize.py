@@ -24,6 +24,8 @@ import hashlib
 import importlib.util
 import json
 import marshal
+import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -230,3 +232,90 @@ class TestModuleNaming(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestTheClaimAboutTheRestOfTheFileIsCheckable(unittest.TestCase):
+    """Constraint 4 says the rest of the file "was not otherwise altered".
+
+    **It was guaranteed by care, not by anything a reader could run.** The record now compares the
+    rewritten tree against the archive it came from and reports which entries are byte-identical and
+    which changed besides the targets — so "I changed one module" stops being an assurance and becomes
+    a measurement.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="nz-", dir=self._root()))
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    @staticmethod
+    def _root():
+        # Outside every refused path, built from chr(92) because a literal Windows path through a
+        # shell heredoc has corrupted this repository repeatedly.
+        bs = chr(92)
+        env = os.environ.get("TRIAGE_TEST_TMP")
+        base = Path(env) if env else Path("E:" + bs + "triage-test-tmp")
+        base.mkdir(parents=True, exist_ok=True)
+        return str(base)
+
+    def _archive_and_tree(self):
+        import nanodesu as nd
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import test_nanodesu as tn
+        arc = self.tmp / "sample.exe"
+        tn.make_archive(arc, [("a.txt", "x", b"payload-aaa", True),
+                              ("b.txt", "x", b"payload-bbb", True)])
+        tree = self.tmp / "tree"
+        tree.mkdir()
+        ar = nd.find_archive(arc)
+        for entry in ar.toc:
+            out = tree / entry.name
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(nd.read_entry(ar, entry))
+        return nd, arc, tree, ar
+
+    def test_an_untouched_tree_reports_every_entry_unchanged(self):
+        _nd, arc, tree, ar = self._archive_and_tree()
+        out = nz.verify_untouched(arc, tree, replaced_names=set())
+        self.assertTrue(out["untouched_verified"], out)
+        self.assertEqual(out["entries_unchanged"], len(ar.toc))
+        self.assertEqual(out["entries_changed"], [])
+
+    def test_a_changed_entry_is_named_not_counted(self):
+        """**Naming it is the point.** "Something else changed" sends the reader looking; naming it
+        tells them whether this output is a one-place change or not."""
+        _nd, arc, tree, _ar = self._archive_and_tree()
+        (tree / "b.txt").write_bytes(b"TAMPERED")
+        out = nz.verify_untouched(arc, tree, replaced_names=set())
+        changed = [c["name"] for c in out["entries_changed"]]
+        self.assertEqual(changed, ["b.txt"])
+        self.assertEqual(out["entries_unchanged"], 1)
+
+    def test_the_target_is_expected_to_differ_and_is_excluded(self):
+        _nd, arc, tree, _ar = self._archive_and_tree()
+        (tree / "a.txt").write_bytes(b"STUBBED")
+        out = nz.verify_untouched(arc, tree, replaced_names={"a.txt"})
+        self.assertEqual(out["entries_changed"], [])
+        self.assertEqual(out["entries_unchanged"], 1)
+
+    def test_an_entry_missing_from_the_tree_is_reported(self):
+        _nd, arc, tree, _ar = self._archive_and_tree()
+        (tree / "a.txt").unlink()
+        out = nz.verify_untouched(arc, tree, replaced_names=set())
+        self.assertEqual([c["name"] for c in out["entries_changed"]], ["a.txt"])
+        self.assertIn("absent", out["entries_changed"][0]["why"])
+
+    def test_a_failed_comparison_is_not_a_clean_one(self):
+        """Never raises -- a broken comparison must not read as "nothing changed"."""
+        out = nz.verify_untouched(Path("does-not-exist.exe"), self.tmp,
+                                          replaced_names=set())
+        self.assertFalse(out["untouched_verified"])
+        self.assertIn("could not be read back", out["untouched_unverifiable"])
+        self.assertIsNone(out["entries_unchanged"])
+
+    def test_the_record_carries_the_version_and_the_action(self):
+        """**Both repositories must write the same pair**, or the cross-tool consistency assertion has
+        nothing to align on. See ACTION_CONTRACT.md."""
+        self.assertEqual(nz.RECORD_VERSION, 1)
+        src = (Path(__file__).resolve().parent.parent / "neutralize.py").read_text(encoding="utf-8")
+        self.assertIn('"record_version": RECORD_VERSION', src)
+        self.assertIn('"action": "neutralize"', src)
