@@ -244,18 +244,18 @@ class TestTheClaimAboutTheRestOfTheFileIsCheckable(unittest.TestCase):
     """
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="nz-", dir=self._root()))
+        self.tmp = self._tmp()
         self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
 
-    @staticmethod
-    def _root():
-        # Outside every refused path, built from chr(92) because a literal Windows path through a
-        # shell heredoc has corrupted this repository repeatedly.
-        bs = chr(92)
-        env = os.environ.get("TRIAGE_TEST_TMP")
-        base = Path(env) if env else Path("E:" + bs + "triage-test-tmp")
-        base.mkdir(parents=True, exist_ok=True)
-        return str(base)
+    def _tmp(self):
+        """A temporary directory, with no opinion about which drive it is on.
+
+        **The first version demanded a specific drive and made the whole class fail on CI**, where
+        that drive does not exist. Path discipline belongs to the tools that refuse destinations;
+        `neutralize` does not care where it writes, so a fixture insisting on one drive tests the
+        runner rather than the code.
+        """
+        return Path(tempfile.mkdtemp(prefix="nz-"))
 
     def _archive_and_tree(self):
         import nanodesu as nd
