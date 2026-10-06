@@ -161,7 +161,7 @@
 
 | # | 状态 | 项 |
 |---|---|---|
-| **A-1** | `[x]` | `CHARACTER_LILITH.md` · `PERSONA.md` · `PERSONA.nsfw.md` · 13 条文案 · 4 处接线 |
+| **A-1** | `[x]` | 人格设计已按 2026-10-06 定稿重建：`SOURCE_DESIGN_LILITH_2026-10-06.md`（只读来源）→ `CHARACTER_BLANCROSE.md` → `PERSONA_BLANCROSE.md` + `PERSONA.nsfw.md`。旧的 `CHARACTER_LILITH.md` / `PERSONA.md` **已标过时**（基于被取代的参考图）。13 条文案 · 4 处接线 |
 | **A-2** | `[ ]` | **覆盖哑路径**：`build` / `verify` / `neutralize` / `pyz` / `search` 现在不说话 |
 | **A-4** | `[ ]` | **给"语气不进机器可读输出"加测试** | **这条在四个文档里被声明，零处被验证。** `test_voice_wiring.py` 断言了码位 / 可达 / `--plain` / 分级依据证据，**唯独没断言这条**——与 1.7.0 修过的那类缺口同一个形状（部件齐全但没接线）。断言：`--json` / manifest / `_neutralize_record.json` 的字节里不出现人格文案，**即使 `--nsfw` 开着** |
 

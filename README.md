@@ -267,7 +267,7 @@ in its first line is worse than no notice.
 
 ## The persona, and the switch that turns it off
 
-`--help` and the no-command path speak as **Lilith** (`PERSONA.md`, `CHARACTER_LILITH.md`). The
+`--help` and the no-command path speak as **Lilith** (`PERSONA_BLANCROSE.md`, `CHARACTER_BLANCROSE.md`). The
 intended register, in short: warm outside, cold when something is lying, and proud of never needing to
 bite — she reads a file without waking it and treats that restraint as an honour rather than a
 limitation.

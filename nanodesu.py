@@ -1306,7 +1306,7 @@ def read_file(target, name: str) -> bytes:
 # --------------------------------------------------------------------------- #
 # The voice
 #
-# Lilith speaks in the interactive prose and nowhere else. See PERSONA.md for the character; the
+# Lilith speaks in the interactive prose and nowhere else. See PERSONA_BLANCROSE.md for the character; the
 # two rules that decided the shape of this code are:
 #
 #   * she never claims to have done something she did not do -- the tool does not execute anything,
