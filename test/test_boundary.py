@@ -23,6 +23,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+from spawn_guard import require_spawn  # noqa: E402  (needs HERE on the path first)
+
 spec = importlib.util.spec_from_file_location("nano_boundary", HERE.parent / "boundary.py")
 bd = importlib.util.module_from_spec(spec)
 sys.modules["nano_boundary"] = bd
@@ -98,6 +100,7 @@ class TestTheCliExposesIt(unittest.TestCase):
         # not ASCII, and Windows decodes a child's output with the system code page -- cp1252 on the CI
         # runner, which raised UnicodeDecodeError on a byte that is a valid UTF-8 continuation. That is
         # a property of the harness rather than of the tool, and it made the suite locale-dependent.
+        require_spawn(self, "the --boundary flag through the CLI")
         out = subprocess.run([sys.executable, str(NANODESU), "--boundary"],
                              capture_output=True, text=True, encoding="utf-8",
                              errors="replace")

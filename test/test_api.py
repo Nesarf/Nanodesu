@@ -22,6 +22,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+from spawn_guard import require_spawn  # noqa: E402  (needs HERE on the path first)
+
 
 def _load(name: str, filename: str):
     spec = importlib.util.spec_from_file_location(name, HERE.parent / filename)
@@ -200,6 +202,7 @@ class TestItStaysALibraryOnDisk(unittest.TestCase):
         # annotations through sys.modules[cls.__module__], and an unregistered module makes
         # that lookup return None on 3.14. unpack.py already did this correctly; the test did
         # not, which is what this test caught.
+        require_spawn(self, "importing the module in a clean interpreter")
         code = ("import importlib.util,sys;"
                 "s=importlib.util.spec_from_file_location('n',%r);"
                 "m=importlib.util.module_from_spec(s);"

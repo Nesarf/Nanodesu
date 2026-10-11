@@ -27,6 +27,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+from spawn_guard import require_spawn  # noqa: E402  (needs HERE on the path first)
+
 spec = importlib.util.spec_from_file_location("nano_voice", HERE.parent / "nanodesu.py")
 nano = importlib.util.module_from_spec(spec)
 sys.modules["nano_voice"] = nano
@@ -107,6 +109,7 @@ class TestTheVoiceCanBeSilenced(unittest.TestCase):
     def test_the_environment_variable_is_honoured(self):
         """Checked through a real subprocess, because the variable is read in main()."""
         env = dict(os.environ, NANODESU_PLAIN="1")
+        require_spawn(self, 'the CLI reading NANODESU_NSFW')
         out = subprocess.run([sys.executable, str(SOURCE), "--help"],
                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         self.assertEqual(out.returncode, 0)
@@ -114,6 +117,7 @@ class TestTheVoiceCanBeSilenced(unittest.TestCase):
                          "NANODESU_PLAIN=1 still printed the voice")
 
     def test_plain_reaches_the_help_text(self):
+        require_spawn(self, 'the CLI with --plain')
         out = subprocess.run([sys.executable, str(SOURCE), "--plain", "--help"],
                              capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(out.returncode, 0)
@@ -121,6 +125,7 @@ class TestTheVoiceCanBeSilenced(unittest.TestCase):
                          "--plain still printed the voice")
 
     def test_the_help_text_without_plain_contains_her(self):
+        require_spawn(self, 'the CLI reading NANODESU_NSFW')
         out = subprocess.run([sys.executable, str(SOURCE), "--help"],
                              capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(out.returncode, 0)
@@ -242,11 +247,13 @@ class TestTheAdultRegisterIsGatedOff(unittest.TestCase):
 
     def test_the_environment_variable_is_honoured(self):
         env = dict(os.environ, NANODESU_NSFW="1")
+        require_spawn(self, 'the CLI reading NANODESU_NSFW')
         out = subprocess.run([sys.executable, str(SOURCE), "--help"],
                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         self.assertEqual(out.returncode, 0)
 
     def test_both_flags_together_is_not_an_error(self):
+        require_spawn(self, 'the CLI with --plain and --nsfw together')
         out = subprocess.run([sys.executable, str(SOURCE), "--plain", "--nsfw", "--help"],
                              capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(out.returncode, 0)
@@ -307,6 +314,10 @@ class TestTheVoiceSurvivesANonUtf8Console(unittest.TestCase):
     """
 
     def _run(self, argv, encoding="cp1252"):
+        # Guarded here rather than in each test, because every test in this class goes through this one
+        # call. Under load this machine refuses to start a process and the exception arrives from
+        # inside `subprocess`, which reads exactly like a product defect. See `spawn_guard`.
+        require_spawn(self, "the CLI under a forced console encoding")
         env = dict(os.environ, PYTHONIOENCODING=encoding)
         return subprocess.run([sys.executable, str(SOURCE)] + argv,
                               capture_output=True, text=True, env=env, encoding="utf-8",

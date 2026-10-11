@@ -29,6 +29,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+from spawn_guard import require_spawn  # noqa: E402  (needs HERE on the path first)
+
 NANODESU = HERE.parent / "nanodesu.py"
 
 spec = importlib.util.spec_from_file_location("nano_bv", HERE.parent / "boundary_voice.py")
@@ -92,6 +94,9 @@ class TestTheVoiceReachesRealPaths(unittest.TestCase):
     """It used to reach only --help and the no-command path."""
 
     def _run(self, args, encoding="utf-8"):
+        # Guarded here rather than in each test: all three go through this call, and a refused spawn
+        # surfaces from inside `subprocess` looking exactly like a broken archive. See `spawn_guard`.
+        require_spawn(self, "a real path through the CLI")
         env = dict(os.environ, PYTHONIOENCODING=encoding)
         return subprocess.run([sys.executable, str(NANODESU)] + args,
                               capture_output=True, text=True, env=env, encoding="utf-8",

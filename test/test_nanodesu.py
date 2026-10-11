@@ -23,6 +23,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from spawn_guard import require_spawn  # noqa: E402  (needs HERE on the path first)
+
 HERE = Path(__file__).resolve().parent
 MODULE_PATH = HERE.parent / "nanodesu.py"
 spec = importlib.util.spec_from_file_location("nanodesu", MODULE_PATH)
@@ -437,6 +441,7 @@ class TestOverlayIsAFirstClassFact(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
         path = tmp / "sample.exe"
         make_archive(path, [("a.txt", "x", b"p", True)])
+        require_spawn(self, "the info command through the CLI")
         out = subprocess.run([sys.executable, str(nano.__file__), "info", str(path)],
                              capture_output=True, text=True, encoding="utf-8",
                              errors="replace")
@@ -537,7 +542,7 @@ class TestDeviceNamesAreNotFilenames(unittest.TestCase):
             with self.subTest(name=name):
                 out = str(nano.confining(Path("."), Path(name), name))
                 if name == "trailing. ":
-                    self.assertNotIn(" ", out.rstrip("\/"))
+                    self.assertNotIn(" ", out.rstrip("/"))
                 else:
                     self.assertTrue(out)
 
