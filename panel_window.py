@@ -4,17 +4,23 @@
 **Why this file exists instead of an import.** The family rule is that the shared pixel layer is *produced
 once and embedded*, and that each tool stays self-contained at run time -- 来源 ≠ 依赖. So this reads
 `panel.json` (exported by Ichiwatashi) and paints it here; nothing reaches into another repository, and the
-layout is a file this tree owns.
+layout is a file this tree owns. `panel.json` is byte-identical across the tools that embed it, which is what
+makes "all of them draw one layout" a checkable fact rather than a claim about intentions.
 
-**What the file carries, and why the checksum matters.** The layout rectangles, the frame's bevel rule, the
-close mark's pixels, the title's room, one key per role, and a colour and a character per key. The checksum
-covers the canonical JSON, so a layout that has been edited by hand after export is refused rather than drawn
-wrongly -- **an embedded fact is only useful if you can tell it from a modified one.**
+**The layout carries no title.** The bar's geometry is shared; the words in it are the tool's. A title baked
+into the file would make each tree's copy differ, and then comparing checksums would no longer answer the one
+question worth asking -- is this the same panel?
 
 **Nothing here is a second opinion about the panel.** Every rectangle comes from the file. If this renderer
 computed the frame for itself, two implementations of one window would exist and nobody could say which was
 right -- which is exactly the defect the panel layer fixed by making its renderer and its checker walk one
 definition.
+
+**Three things it refuses rather than mangles**, because each is a way a window can lie:
+
+* a checksum that does not match -- an edited layout must not draw almost right;
+* a title that does not fit the bar -- a bar that silently shows a different word is worse than no window;
+* a body line wider than the content -- a clipped line is a statement the report never made.
 
 Three entry points, because three things need one: `text()` for a log or a test, `image()` for a PNG, and
 `open_window()` for a person.
@@ -24,12 +30,19 @@ from __future__ import annotations
 import hashlib
 import json
 
-__all__ = ["FORMAT", "PanelLayout", "load", "canonical", "text", "image", "open_window"]
+__all__ = [
+    "FORMAT", "FONT_FORMAT", "PanelLayout", "load", "load_font", "canonical",
+    "text", "image", "open_window",
+]
 
 
 #: The version of the file this module understands. A reader refuses what it does not know rather than
 #: guessing which fields still mean what they meant.
 FORMAT = "ichiwatashi.panel/1"
+
+#: The version of the font file. Separate from the panel's, because the two files are produced by two
+#: different commands and either can change on its own.
+FONT_FORMAT = "ichiwatashi.font/1"
 
 #: Glyphs are 5 wide and 7 tall with one pixel of spacing, matching the font the file names in `chars`.
 GLYPH_W, GLYPH_H = 5, 7
@@ -68,7 +81,38 @@ class PanelLayout:
         self.title_room = tuple(body["title_room"])
         self.bevel = dict(body.get("bevel_rule") or {})
 
-    # -- the one definition of what a pixel is ------------------------------------------------
+    # -- how much room the body has ------------------------------------------------------------
+
+    @property
+    def body_cols(self):
+        """Characters per row that fit in the content rectangle, from the rectangle and the cell size.
+
+        **Derived, never assumed.** A 716-wide panel and a 96-wide one differ by exactly this number, and a
+        caller that hard-coded either would page wrongly on the other -- the same class of defect as the
+        character/pixel unit confusion this reader had to fix once.
+        """
+        cx0, _cy0, cx1, _cy1 = self.layout["content"]
+        return (cx1 - cx0) // CELL_W
+
+    @property
+    def body_rows(self):
+        """Rows that fit in the content rectangle."""
+        _cx0, cy0, _cx1, cy1 = self.layout["content"]
+        return (cy1 - cy0) // CELL_H
+
+    def page_count(self, lines):
+        """How many pages `lines` needs. **Never zero**, because an empty report is still one page."""
+        rows = self.body_rows
+        return max(1, -(-len(lines) // rows))
+
+    def page_lines(self, lines, page):
+        """The slice drawn for `page`, clamped, so a scroll that runs past the end shows the last page."""
+        rows = self.body_rows
+        pages = self.page_count(lines)
+        page = max(0, min(page, pages - 1))
+        return list(lines[page * rows:(page + 1) * rows]), page, pages
+
+    # -- the one definition of what a pixel is -------------------------------------------------
 
     def role_at(self, x, y, *, active=True):
         """The role a pixel carries, walking the same order the panel layer documents.
@@ -110,12 +154,37 @@ class PanelLayout:
             return "well"
         return self.bevel.get("outer_ring", "frame_dark")
 
-    # -- the three renderings ----------------------------------------------------------------
+    # -- what goes in the title bar ------------------------------------------------------------
 
-    def text_rows(self, lines=None, *, title=None, active=True):
+    def _marker(self, page, pages):
+        """`3/7` when there is more than one page, otherwise nothing.
+
+        **A page indicator is a statement about the report**, so it is drawn only when it is true and it is
+        part of what `text()` returns -- a test can read the page count out of the rendering, which is the only
+        way a reader could.
+        """
+        return "%d/%d" % (page + 1, pages) if pages > 1 else ""
+
+    def _title_starts(self, title, marker):
+        """Where the title begins and how much room is left once the marker has taken its columns."""
+        start, room = self.title_room
+        need = len(title or "") * CELL_W
+        marker_room = (len(marker) + 1) * CELL_W if marker else 0
+        if need > room - marker_room:
+            raise ValueError("title %r needs %d px but the title bar has %d%s"
+                             % (title, need, room - marker_room,
+                                " (after the page marker)" if marker else ""))
+        return start, room, need
+
+    # -- the three renderings ------------------------------------------------------------------
+
+    def text_rows(self, lines=None, *, title=None, active=True, page=0):
         """One string per row, one character per logical pixel. For a log, a test, or a fallback."""
-        tx0, ty0, tx1, _ty1 = self.layout["title"]
+        _tx0, ty0, tx1, _ty1 = self.layout["title"]
         cx0, cy0, cx1, cy1 = self.layout["content"]
+        rows, page, pages = self.page_lines(lines or [], page)
+        marker = self._marker(page, pages)
+        start, room, _need = self._title_starts(title, marker)
         grid = [[" "] * self.width for _ in range(self.height)]
         for y in range(self.height):
             for x in range(self.width):
@@ -124,19 +193,20 @@ class PanelLayout:
                 if ch:
                     grid[y][x] = ch
         # **In a character grid one character is one column.** The first version spaced the title and the
-        # body by CELL_W, which is a *pixel* constant, so a 716-wide grid printed "N A N O D E S U" across 56
-        # columns. The two renderings need two different units and that is the whole confusion.
+        # body by CELL_W, which is a *pixel* constant, so a 716-wide grid printed the title one letter per
+        # six columns. The two renderings need two different units and that is the whole confusion.
         if title:
-            start, room = self.title_room
-            # the room is in pixels; in columns it is the same count divided by the cell width
-            if len(title) * CELL_W > room:
-                raise ValueError("title %r needs %d px but the title bar has %d"
-                                 % (title, len(title) * CELL_W, room))
-            for i, ch in enumerate(title.upper()):
+            for i, ch in enumerate(title):
                 x = start + i
                 if x < tx1:
                     grid[ty0 + 1][x] = ch
-        for row_i, line in enumerate(lines or []):
+        if marker:
+            x0 = start + room - len(marker)
+            for i, ch in enumerate(marker):
+                if x0 + i < tx1:
+                    grid[ty0 + 1][x0 + i] = ch
+        self._check_width(rows)
+        for row_i, line in enumerate(rows):
             y = cy0 + row_i
             if y >= cy1:
                 break
@@ -146,20 +216,32 @@ class PanelLayout:
                     grid[y][x] = ch
         return ["".join(r) for r in grid]
 
-    def image(self, lines=None, *, title=None, active=True, scale=2, glyphs=None, draw_fn=None):
-        """A PIL image. **Filled rectangles rather than per-pixel writes**, except for the glyphs.
+    def _check_width(self, rows):
+        """Refuse a line that would be clipped. **A cut line is a claim the report never made.**"""
+        room = self.body_cols
+        for i, line in enumerate(rows):
+            if len(line) > room:
+                raise ValueError("body line %d is %d characters wide but the content area holds %d; "
+                                 "wrap it before drawing rather than losing the end"
+                                 % (i, len(line), room))
+
+    def image(self, lines=None, *, title=None, active=True, scale=2, draw_fn=None, page=0):
+        """A PIL image. **Filled runs rather than per-pixel writes**, except for the glyphs.
 
         `SetPixel`-style per-pixel drawing is what the other tool's own renderer notes as the only way to beat
-        GDI+'s smoothing -- but PIL does not smooth a `putpixel`, so the reason does not carry over, and a
-        rectangle fill is both simpler and the same pixels.
+        GDI+'s smoothing -- but PIL does not smooth a pixel, so the reason does not carry over, and a run fill
+        is both simpler and the same pixels.
         """
         from PIL import Image
 
         if not isinstance(scale, int) or scale < 1:
             raise ValueError("scale must be a positive whole number, got %r" % (scale,))
+        rows, page, pages = self.page_lines(lines or [], page)
+        marker = self._marker(page, pages)
+        self._title_starts(title, marker)                 # refuse before drawing anything
+        self._check_width(rows)
         im = Image.new("RGBA", (self.width, self.height), self.colours[self.key_of["frame_dark"]])
         px = im.load()
-        # fill by runs, which is what the rectangles are: a row of one role is one span
         for y in range(self.height):
             x = 0
             while x < self.width:
@@ -174,43 +256,34 @@ class PanelLayout:
                 if colour:
                     for xx in range(start, x):
                         px[xx, y] = colour
-        self.draw_fn = draw_fn
         if draw_fn is not None:
-            self._draw_text(px, lines or [], title=title)
+            self._draw_text(draw_fn, px, rows, title=title, marker=marker)
         if scale != 1:
             im = im.resize((im.width * scale, im.height * scale), Image.NEAREST)
         return im
 
-    def _draw_text(self, px, lines, *, title=None):
-        """Paint the title and the body with whatever glyph table the caller supplied.
+    def _draw_text(self, draw, px, rows, *, title=None, marker=""):
+        """Paint the title, the page marker and the body with whatever glyph table the caller supplied.
 
         **No font is imported and none is assumed.** A panel needs a 5x7 table and one is embedded beside this
         file; if it is missing, the frame still draws and the text does not -- which is a visible, reportable
-        state rather than an import error at start-up. The first version of this method imported a module that
-        does not exist, which is the same class of mistake as calling a function before writing it.
+        state rather than an import error at start-up.
+
+        **Case is preserved.** An earlier version upper-cased here, which threw away 26 of the 88 glyphs the
+        font carries: the shared table grew a lower-case alphabet and this renderer could not draw one letter
+        of it. The same defect was measured in the PowerShell renderer, where the table's keys were also
+        case-insensitive -- one shared asset, dropped at the last step, twice.
         """
-        draw = self.draw_fn
-        if draw is None:
-            return
-
-        tx0, ty0, tx1, _ty1 = self.layout["title"]
-        cx0, cy0, cx1, cy1 = self.layout["content"]
-        if title:
-            start, room = self.title_room
-            if len(title) * CELL_W > room:
-                raise ValueError("title %r needs %d px but the title bar has %d"
-                                 % (title, len(title) * CELL_W, room))
-            draw(px, start, ty0 + 1, title, self.colours[self.key_of["title_text"]])
+        _tx0, ty0, _tx1, _ty1 = self.layout["title"]
+        cx0, cy0, _cx1, _cy1 = self.layout["content"]
         ink = self.colours[self.key_of["title_text"]]
-        for row_i, line in enumerate(lines):
-            y = cy0 + row_i * CELL_H
-            if y >= cy1:
-                break
-            for col_i, ch in enumerate(line[: (cx1 - cx0) // CELL_W]):
-                draw(px, cx0 + col_i * CELL_W, y, ch, ink)
-
-
-FONT_FORMAT = "ichiwatashi.font/1"
+        start, room, _need = self._title_starts(title, marker)
+        if title:
+            draw(px, start, ty0 + 1, title, ink)
+        if marker:
+            draw(px, start + room - len(marker) * CELL_W, ty0 + 1, marker, ink)
+        for row_i, line in enumerate(rows):
+            draw(px, cx0, cy0 + row_i * CELL_H, line, ink)
 
 
 def load_font(path):
@@ -232,22 +305,24 @@ def load_font(path):
     rows = {ch: [int(h[i * 2:i * 2 + 2], 16) for i in range(GLYPH_H)]
             for ch, h in body["glyphs"].items()}
 
+    #: A box for a character the table does not hold. **Drawn rather than skipped**, so a gap is visible as a
+    #: gap and not as a shorter word.
+    BOX = [0b11111, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11111]
+
     def draw(px, x, y, text, colour):
-        for i, ch in enumerate(text.upper()):
-            g = rows.get(ch) or rows.get(ch.lower()) or rows.get(ch.upper())
+        for i, ch in enumerate(text):
+            g = rows.get(ch)
             if g is None:
-                # **A missing glyph draws a box rather than nothing**, so a gap is visible as a gap and not as
-                # a shorter word. Same rule as the other tool's fallback.
-                g = [0b11111, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11111]
+                g = BOX
             for r in range(GLYPH_H):
                 for c in range(GLYPH_W):
                     if g[r] & (1 << (GLYPH_W - 1 - c)):
-                        xx, yy = x + i * CELL_W + c, y + r
-                        if 0 <= xx < px.__self__.width if hasattr(px, "__self__") else True:
-                            try:
-                                px[xx, yy] = colour
-                            except IndexError:
-                                pass
+                        try:
+                            px[x + i * CELL_W + c, y + r] = colour
+                        except IndexError:
+                            # Past the panel's edge. **Not an error**: a caller may deliberately draw a line
+                            # that runs to the border, and the border is where it stops.
+                            pass
 
     return draw
 
@@ -259,23 +334,28 @@ def load(path):
         return PanelLayout(json.load(fh))
 
 
-def text(layout, lines=None, *, title=None, active=True):
+def text(layout, lines=None, *, title=None, active=True, page=0):
     """The panel as text, one string per row. The form a test can compare."""
-    return layout.text_rows(lines, title=title, active=active)
+    return layout.text_rows(lines, title=title, active=active, page=page)
 
 
-def image(layout, lines=None, *, title=None, active=True, scale=2, glyphs=None, draw_fn=None):
+def image(layout, lines=None, *, title=None, active=True, scale=2, draw_fn=None, page=0):
     """The panel as a PIL image. `draw_fn` comes from `load_font`; without it the frame draws and the text
     does not, which is a visible state rather than an import error."""
-    return layout.image(lines, title=title, active=active, scale=scale, glyphs=glyphs, draw_fn=draw_fn)
+    return layout.image(lines, title=title, active=active, scale=scale, draw_fn=draw_fn, page=page)
 
 
-def open_window(layout, lines, *, title=None, scale=2, glyphs=None, draw_fn=None):
+def open_window(layout, lines, *, title=None, scale=2, draw_fn=None):
     """Show the panel in a window, with no system chrome.
 
     **The system title bar is not used**, because the panel already is one and a system bar is neither pixel
     art nor this project's. What the system provided is reimplemented from the layout: dragging uses the
     title bar's rectangle, and clicking the close mark's pixels closes the window.
+
+    **Scrolling is the window's job, and the page marker is how it says so.** A report longer than 46 rows is
+    the normal case for anything with findings in it, so the keys are part of the interface rather than a
+    nicety: Up/Down one row, PageUp/PageDown one page, Home/End, and the bar carries `page/total` whenever
+    there is more than one.
 
     Needs a display. A test that called this unconditionally would block in `mainloop`, so it is called from a
     command a person runs, never from the suite.
@@ -284,20 +364,23 @@ def open_window(layout, lines, *, title=None, scale=2, glyphs=None, draw_fn=None
 
     from PIL import ImageTk
 
-    font_glyphs = glyphs
     root = tk.Tk()
-    root.title(title or "nanodesu")
+    root.title(title or "panel")
     root.resizable(False, False)
     root.overrideredirect(True)
 
+    state = {"page": 0, "rows": list(lines)}
+
     def redraw():
-        im = layout.image(lines, title=title, scale=scale, glyphs=font_glyphs, draw_fn=draw_fn)
+        im = layout.image(state["rows"], title=title, scale=scale, draw_fn=draw_fn,
+                          page=state["page"])
         photo = ImageTk.PhotoImage(im)
         holder["photo"] = photo
         canvas.itemconfigure(item, image=photo)
+        canvas.configure(width=photo.width(), height=photo.height())
 
     holder = {}
-    im0 = layout.image(lines, title=title, scale=scale, glyphs=font_glyphs, draw_fn=draw_fn)
+    im0 = layout.image(state["rows"], title=title, scale=scale, draw_fn=draw_fn, page=0)
     photo0 = ImageTk.PhotoImage(im0)
     holder["photo"] = photo0
     canvas = tk.Canvas(root, width=photo0.width(), height=photo0.height(),
@@ -321,9 +404,31 @@ def open_window(layout, lines, *, title=None, scale=2, glyphs=None, draw_fn=None
         if drag["x"] or drag["y"]:
             root.geometry("+%d+%d" % (event.x_root - drag["x"], event.y_root - drag["y"]))
 
+    def move(delta):
+        before = state["page"]
+        state["page"] = max(0, min(state["page"] + delta, layout.page_count(state["rows"]) - 1))
+        if state["page"] != before:
+            redraw()
+
     def on_key(event):
-        if event.keysym in ("Escape", "q", "Q"):
+        rows = layout.body_rows
+        key = event.keysym
+        if key in ("Escape", "q", "Q"):
             root.destroy()
+        elif key == "Down":
+            move(1)
+        elif key == "Up":
+            move(-1)
+        elif key in ("Next", "space"):
+            move(rows)
+        elif key == "Prior":
+            move(-rows)
+        elif key == "Home":
+            state["page"] = 0
+            redraw()
+        elif key == "End":
+            state["page"] = layout.page_count(state["rows"]) - 1
+            redraw()
 
     canvas.bind("<ButtonPress-1>", on_press)
     canvas.bind("<B1-Motion>", on_drag)

@@ -1583,8 +1583,8 @@ def build_parser():
         p.add_argument("target", help="path to the executable or PYZ archive")
         # **The window is drawn from two embedded files** -- `panel.json` and `font.json`, both exported by
         # Ichiwatashi and both carrying a checksum -- so nothing here reaches into another repository at run
-        # time. Only the read-only commands have anything to put in it; the flag is accepted everywhere and
-        # ignored where it would mean nothing.
+        # time. Only the reporting commands have something to put in it, and `main` refuses the flag anywhere
+        # else: an accepted-and-ignored flag leaves the caller believing a window opened.
         p.add_argument("--window", action="store_true",
                        help="show the result in a pixel-art window instead of printing it "
                             "(info, ls, tree and verify; needs a display)")
@@ -1785,9 +1785,27 @@ def _run_in_window(run, ar, args):
     text = buf.getvalue()
     lines = text.rstrip("\n").split("\n") if text.strip() else []
     base = os.path.dirname(os.path.abspath(__file__))
+
+    def embedded(name):
+        """Where an embedded data file lives: beside this module, or in the install's share directory.
+
+        **Two locations because there are two ways to run this.** From a clone the file sits next to
+        `nanodesu.py`; from a wheel it cannot, because a flat `py-modules` distribution carries modules and
+        not data -- so the two JSON files travel as `data-files` under `<prefix>/share/nanodesu`. Measured on
+        a built wheel before this resolver existed: the module that paints the window shipped, the two files
+        it paints from did not, so `--window` could only ever print the "cannot draw the window" path for
+        anyone who installed rather than cloned.
+        """
+        beside_name = os.path.join(base, name)
+        if os.path.isfile(beside_name):
+            return beside_name
+        import sysconfig
+
+        return os.path.join(sysconfig.get_path("data"), "share", "nanodesu", name)
+
     try:
-        layout = panel_window.load(os.path.join(base, "panel.json"))
-        draw = panel_window.load_font(os.path.join(base, "font.json"))
+        layout = panel_window.load(embedded("panel.json"))
+        draw = panel_window.load_font(embedded("font.json"))
     except (OSError, ValueError) as exc:
         # **The reason, not a traceback**: a missing or edited embedded file is a deployment problem, and the
         # sentence names the file and what is wrong with it.
@@ -1851,6 +1869,14 @@ def main(argv=None):
         return cmd_neutralize(args.target, args)
     if args.cmd == "build":
         return cmd_build(args.target, args)
+    if getattr(args, "window", False) and args.cmd not in WINDOW_COMMANDS:
+        # **Refused rather than ignored.** The flag used to be accepted on every command and silently
+        # dropped where it meant nothing, so `extract --window` exited 0 having opened nothing -- a
+        # caller that asked for a window and got none, with no way to tell. Listed rather than inferred,
+        # because "which commands produce a report" is a fact about this tool and not about argparse.
+        print("--window shows a report, and %r does not produce one; it is available for %s"
+              % (args.cmd, ", ".join(WINDOW_COMMANDS)), file=sys.stderr)
+        return 2
     ar = find_archive(args.target)
     run = {
         "info": cmd_info, "ls": cmd_ls, "tree": cmd_tree, "search": cmd_search,

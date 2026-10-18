@@ -21,7 +21,7 @@
   "wl": " "
  },
  "chars_note": "null means the role is drawn as font glyphs, not as one character",
- "checksum": "3a7fa71013d6f0643017068fa0d2907e7687b12906fc897971a72f28c219a035",
+ "checksum": "a43fff9be4a8e5e34d4031c6655ecb6d7ce9b5a46fd52139a19f6678e82ee18b",
  "close_pixels": [
   [
    708,
@@ -175,7 +175,7 @@
   "title_h": 9
  },
  "tier": "console",
- "title": "NANODESU",
+ "title": null,
  "title_room": [
   4,
   703

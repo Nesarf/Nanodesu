@@ -54,7 +54,8 @@ Nothing to install: it is a single file using only the standard library.
 python nanodesu.py info path/to/app.exe
 ```
 
-Requires Python 3.9 or newer.
+Requires Python 3.9 or newer. The library half needs nothing else; the window needs an image library,
+so `pip install nanodesu[window]` for that one flag.
 
 ## Usage
 
@@ -124,6 +125,29 @@ NANODESU_PYTHON="C:/tools/python-{ver}/python.exe" python nanodesu.py extract ..
 ```
 
 `{ver}` is replaced by the version string, e.g. `3.12`.
+
+## The window
+
+```bash
+python nanodesu.py info path/to/app.exe --window
+```
+
+The four reporting commands — `info`, `ls`, `tree`, `verify` — can draw their output into a
+pixel-art window instead of printing it. **The lines are captured from the command that already
+writes them**, not re-formatted, so the window and the terminal cannot disagree.
+
+**The frame is not this project's invention.** `panel.json` and `font.json` are exported by
+[Ichiwatashi](https://github.com/Nesarf/Ichiwatashi), the family's shared pixel layer, and both carry
+a checksum over their own contents — a layout edited after export is refused rather than drawn almost
+right. They are embedded files, not a dependency: nothing is imported from another repository at run
+time, so this tool stays a single file that needs nothing.
+
+The system title bar is not used. The panel draws its own, dragging uses the title rectangle from the
+layout, and the `x` in the corner is a real control whose pixels the file names. Reports longer than
+46 rows page instead of clipping, with `1/3` at the right of the bar.
+
+Passing `--window` to a command that produces no report (`extract`, `cat`, `search`, `pyz`, `build`,
+`neutralize`) is **refused**, not ignored.
 
 ## As a library
 

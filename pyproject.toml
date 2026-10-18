@@ -8,6 +8,16 @@ license = { text = "MIT" }
 keywords = ["pyinstaller", "unpacker", "reverse-engineering", "carchive", "pyz"]
 dependencies = []
 
+[project.optional-dependencies]
+# `--window` needs an image library, and the base install stays empty on purpose -- the unpacker is
+# meant to run on a machine somebody else controls, so every dependency it does not have is one less
+# thing a reader has to audit. Measured on a clean venv install of this wheel: importing `panel_window`
+# succeeds (it only imports PIL inside the drawing call), then `open_window` raises ModuleNotFoundError
+# and the tool prints the report instead. Loud, and still no window. Hence the extra.
+# tkinter is not here because it is not a pip package: on Windows the official interpreter ships it,
+# and on Linux it is `python3-tk` from the distribution.
+window = ["pillow>=9"]
+
 [project.scripts]
 nanodesu = "nanodesu:main"
 
@@ -21,7 +31,18 @@ Issues = "https://github.com/Nesarf/Nanodesu/issues"
 Changelog = "https://github.com/Nesarf/Nanodesu/releases"
 
 [tool.setuptools]
-py-modules = ["nanodesu", "neutralize", "boundary", "boundary_voice"]
+# `panel_window` paints the window from two files Ichiwatashi exports. It was written and used locally
+# without being declared here, so a wheel carried `nanodesu.py` and nothing to draw a window with --
+# the same shape as the `unpack.py` defect recorded in the sibling project, one release later.
+py-modules = ["nanodesu", "neutralize", "boundary", "boundary_voice", "panel_window"]
 
 [tool.setuptools.package-data]
 "*" = ["README.md", "LICENSE"]
+
+# The two files the window is painted from. **They are not modules, so `py-modules` cannot carry them**,
+# and `package-data` applies to packages rather than to a flat set of modules. Measured on a built wheel:
+# without this table the wheel holds `panel_window.py` and neither JSON, so `--window` prints its
+# "cannot draw the window" line for every user who installed rather than cloned -- a loud failure, but a
+# window that never opens is still a window that never opens.
+[tool.setuptools.data-files]
+"share/nanodesu" = ["panel.json", "font.json"]
