@@ -757,7 +757,7 @@ def cmd_cat(ar: Archive, args) -> int:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(blob)
-        print("√ %s → %s  (%s)" % (matches[0].name, out, human(len(blob))))
+        print("ok   %s → %s  (%s)" % (matches[0].name, out, human(len(blob))))
     else:
         sys.stdout.buffer.write(blob)
         sys.stdout.buffer.flush()
@@ -877,7 +877,7 @@ def cmd_verify(ar: Archive, args) -> int:
             read_entry(ar, e, verify_len=True)
         except Exception as ex:
             bad += 1
-            print("  ✗ %s: %s" % (e.name, ex), file=sys.stderr)
+            print("  FAIL %s: %s" % (e.name, ex), file=sys.stderr)
         if i % 500 == 0:
             print("  ... verified %d/%d" % (i, len(ar.toc)))
     if bad:
