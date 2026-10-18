@@ -1581,6 +1581,13 @@ def build_parser():
 
     def common(p):
         p.add_argument("target", help="path to the executable or PYZ archive")
+        # **The window is drawn from two embedded files** -- `panel.json` and `font.json`, both exported by
+        # Ichiwatashi and both carrying a checksum -- so nothing here reaches into another repository at run
+        # time. Only the read-only commands have anything to put in it; the flag is accepted everywhere and
+        # ignored where it would mean nothing.
+        p.add_argument("--window", action="store_true",
+                       help="show the result in a pixel-art window instead of printing it "
+                            "(info, ls, tree and verify; needs a display)")
 
     p = sub.add_parser("info", help="summarise the archive"); common(p)
 
@@ -1752,6 +1759,47 @@ def cmd_neutralize(target: str, args) -> int:
     return 0
 
 
+#: The commands whose output is a report rather than a file, and therefore the ones a window can show.
+WINDOW_COMMANDS = ("info", "ls", "tree", "verify")
+
+
+def _run_in_window(run, ar, args):
+    """Run a reporting command with stdout captured, then show it in the panel window.
+
+    **Captured rather than refactored.** The commands print; turning every `print` into a list would touch
+    four functions and risk changing what they emit. Redirecting stdout keeps their output byte-identical and
+    gives the window exactly what a terminal would have shown -- which is the only way the two views can be
+    trusted to agree.
+
+    **Not imported at module scope**: `panel_window` needs tkinter and PIL, and a tool that cannot import
+    itself without a GUI toolkit is a tool that stops working on a headless machine.
+    """
+    import contextlib
+    import io as _io
+
+    import panel_window
+
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = run(ar, args)
+    text = buf.getvalue()
+    lines = text.rstrip("\n").split("\n") if text.strip() else []
+    base = os.path.dirname(os.path.abspath(__file__))
+    try:
+        layout = panel_window.load(os.path.join(base, "panel.json"))
+        draw = panel_window.load_font(os.path.join(base, "font.json"))
+    except (OSError, ValueError) as exc:
+        # **The reason, not a traceback**: a missing or edited embedded file is a deployment problem, and the
+        # sentence names the file and what is wrong with it.
+        print("cannot draw the window: %s" % exc)
+        print("printing instead:\n")
+        for line in lines:
+            print(line)
+        return rc
+    panel_window.open_window(layout, lines, title="NANODESU", draw_fn=draw)
+    return rc
+
+
 def main(argv=None):
     # The register has to be decided before the parser is built, because the parser's own help
     # text is one of the places the voice appears. So the flag is scanned here rather than read
@@ -1804,10 +1852,13 @@ def main(argv=None):
     if args.cmd == "build":
         return cmd_build(args.target, args)
     ar = find_archive(args.target)
-    return {
+    run = {
         "info": cmd_info, "ls": cmd_ls, "tree": cmd_tree, "search": cmd_search,
         "cat": cmd_cat, "extract": cmd_extract, "verify": cmd_verify,
-    }[args.cmd](ar, args)
+    }[args.cmd]
+    if getattr(args, "window", False) and args.cmd in WINDOW_COMMANDS:
+        return _run_in_window(run, ar, args)
+    return run(ar, args)
 
 
 if __name__ == "__main__":

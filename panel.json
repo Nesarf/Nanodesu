@@ -1,0 +1,183 @@
+{
+ "active": true,
+ "bevel_rule": {
+  "inner_ring": "frame_light",
+  "lit_sides": [
+   "top",
+   "left"
+  ],
+  "note": "a pixel at distance 0 from the frame edge is frame_dark; at distance ring_offset it is frame_light when it lies on a lit side, otherwise frame_dark; corners belong to the top or the left",
+  "outer_ring": "frame_dark",
+  "ring_offset": 1
+ },
+ "chars": {
+  "cm": "x",
+  "ct": " ",
+  "fd": "#",
+  "fl": "+",
+  "ta": "-",
+  "ti": ".",
+  "tx": null,
+  "wl": " "
+ },
+ "chars_note": "null means the role is drawn as font glyphs, not as one character",
+ "checksum": "3a7fa71013d6f0643017068fa0d2907e7687b12906fc897971a72f28c219a035",
+ "close_pixels": [
+  [
+   708,
+   4
+  ],
+  [
+   708,
+   8
+  ],
+  [
+   709,
+   5
+  ],
+  [
+   709,
+   7
+  ],
+  [
+   710,
+   6
+  ],
+  [
+   711,
+   5
+  ],
+  [
+   711,
+   7
+  ],
+  [
+   712,
+   4
+  ],
+  [
+   712,
+   8
+  ]
+ ],
+ "colours": {
+  "cm": [
+   208,
+   72,
+   88,
+   255
+  ],
+  "ct": [
+   60,
+   52,
+   84,
+   255
+  ],
+  "fd": [
+   24,
+   22,
+   32,
+   255
+  ],
+  "fl": [
+   96,
+   88,
+   128,
+   255
+  ],
+  "ta": [
+   52,
+   44,
+   72,
+   255
+  ],
+  "ti": [
+   30,
+   27,
+   40,
+   255
+  ],
+  "tx": [
+   232,
+   228,
+   244,
+   255
+  ],
+  "wl": [
+   36,
+   32,
+   48,
+   255
+  ]
+ },
+ "format": "ichiwatashi.panel/1",
+ "keys": {
+  "close_mark": "cm",
+  "content": "ct",
+  "frame_dark": "fd",
+  "frame_light": "fl",
+  "title": "ta",
+  "title_inactive": "ti",
+  "title_text": "tx",
+  "well": "wl"
+ },
+ "layout": {
+  "close": [
+   707,
+   3,
+   714,
+   10
+  ],
+  "content": [
+   4,
+   13,
+   712,
+   381
+  ],
+  "frame": [
+   0,
+   0,
+   716,
+   385
+  ],
+  "title": [
+   2,
+   2,
+   714,
+   11
+  ],
+  "well": [
+   2,
+   11,
+   714,
+   383
+  ]
+ },
+ "roles": [
+  "frame_dark",
+  "frame_light",
+  "title",
+  "title_inactive",
+  "title_text",
+  "close_mark",
+  "well",
+  "content"
+ ],
+ "size": [
+  716,
+  385
+ ],
+ "spec": {
+  "bevel": true,
+  "border": 2,
+  "close": true,
+  "pad": 2,
+  "title_h": 9
+ },
+ "tier": "console",
+ "title": "NANODESU",
+ "title_room": [
+  4,
+  703
+ ]
+}
