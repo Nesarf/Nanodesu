@@ -23,6 +23,7 @@ import importlib.util
 import json
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -95,6 +96,52 @@ class TestTheEmbeddedFiles(unittest.TestCase):
         self.assertIsNotNone(files, "no data-files table, so the JSON cannot reach a wheel")
         self.assertIn("panel.json", files.group(1))
         self.assertIn("font.json", files.group(1))
+
+
+class TestTheBodyInk(unittest.TestCase):
+    """Body text used to be drawn in the title bar's ink.
+
+    All three renderers did it -- two Python and one PowerShell -- so a change to the bar's colour silently
+    restyled every report and nothing said the body was borrowing. The layout names the job now, and a file
+    exported before the role existed still draws in the colour it always used.
+    """
+
+    def test_the_two_inks_are_separate_jobs(self):
+        body_key = LAYOUT.key_of["content_text"]
+        title_key = LAYOUT.key_of["title_text"]
+        self.assertNotEqual(body_key, title_key)
+        self.assertEqual(LAYOUT.content_ink, LAYOUT.colours[body_key])
+        self.assertNotEqual(LAYOUT.content_ink, LAYOUT.colours[title_key])
+
+    @unittest.skipUnless(HAVE_PIL, "PIL is what the renderer draws with")
+    def test_rendered_body_text_uses_that_ink_and_not_the_bar_s(self):
+        cx0, cy0, _cx1, _cy1 = LAYOUT.layout["content"]
+        _tx0, ty0, _tx1, _ty1 = LAYOUT.layout["title"]
+        start, _room = LAYOUT.title_room
+        im = pw.image(LAYOUT, ["I"], title="T", scale=1, draw_fn=GLYPH)
+
+        def cell(x, y):
+            return [im.getpixel((x + dx, y + dy))
+                    for dy in range(pw.CELL_H) for dx in range(pw.CELL_W)]
+
+        body, title = cell(cx0, cy0), cell(start, ty0 + 1)
+        self.assertIn(LAYOUT.content_ink, body, "the body was not drawn in the layout's own ink")
+        self.assertNotIn(LAYOUT.colours[LAYOUT.key_of["title_text"]], body,
+                         "the body is still borrowing the title bar's ink")
+        self.assertNotIn(LAYOUT.content_ink, title, "the title is drawn in the body's ink")
+
+    def test_a_file_without_the_role_falls_back_to_the_title_ink(self):
+        body = json.loads((ROOT / "panel.json").read_text(encoding="utf-8"))
+        body["roles"] = [r for r in body["roles"] if r != "content_text"]
+        del body["keys"]["content_text"]
+        body["checksum"] = hashlib.sha256(
+            pw.canonical({k: v for k, v in body.items() if k != "checksum"}).encode("utf-8")).hexdigest()
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "panel.json"
+            p.write_text(json.dumps(body), encoding="utf-8")
+            old = pw.load(p)
+        self.assertNotIn("content_text", old.key_of)
+        self.assertEqual(old.content_ink, old.colours[old.key_of["title_text"]])
 
 
 class TestCaseIsPreserved(unittest.TestCase):

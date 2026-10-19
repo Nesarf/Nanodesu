@@ -81,6 +81,26 @@ class PanelLayout:
         self.title_room = tuple(body["title_room"])
         self.bevel = dict(body.get("bevel_rule") or {})
 
+    # -- what colour text is drawn in ------------------------------------------------------------
+
+    @property
+    def content_ink(self):
+        """The colour body text is drawn in: **the layout's own role, or the title's ink if the file predates it.**
+
+        This role exists because of a measured defect rather than a preference: all three renderers -- two
+        Python and one PowerShell -- drew body text in `title_text`, so a change to the bar's ink silently
+        restyled every report, and nothing anywhere said the body was borrowing.
+
+        **The fallback is not politeness.** A file exported before the role existed has to keep drawing, and it
+        does, in the colour it always used -- so upgrading one side of an embedding does not break the other.
+        A layout with neither role cannot draw text at all, and says so rather than choosing white quietly.
+        """
+        for role in ("content_text", "title_text"):
+            key = self.key_of.get(role)
+            if key and key in self.colours:
+                return self.colours[key]
+        raise ValueError("panel layout has neither content_text nor title_text, so it cannot draw text")
+
     # -- how much room the body has ------------------------------------------------------------
 
     @property
@@ -276,14 +296,17 @@ class PanelLayout:
         """
         _tx0, ty0, _tx1, _ty1 = self.layout["title"]
         cx0, cy0, _cx1, _cy1 = self.layout["content"]
-        ink = self.colours[self.key_of["title_text"]]
+        # **Two inks, because they are two jobs.** The bar names the window and the body is what a reader
+        # stays for; they used to be one colour, borrowed, which is what `content_text` was added for.
+        title_ink = self.colours[self.key_of["title_text"]]
+        body_ink = self.content_ink
         start, room, _need = self._title_starts(title, marker)
         if title:
-            draw(px, start, ty0 + 1, title, ink)
+            draw(px, start, ty0 + 1, title, title_ink)
         if marker:
-            draw(px, start + room - len(marker) * CELL_W, ty0 + 1, marker, ink)
+            draw(px, start + room - len(marker) * CELL_W, ty0 + 1, marker, title_ink)
         for row_i, line in enumerate(rows):
-            draw(px, cx0, cy0 + row_i * CELL_H, line, ink)
+            draw(px, cx0, cy0 + row_i * CELL_H, line, body_ink)
 
 
 def load_font(path):
