@@ -142,7 +142,7 @@
 
 **原文写的是「`output_sha256` 必须相同——这是『产物一致』的直接形式」。测下来它不是。**
 
-**证据**（`triage/tools/probe_pyz_rebuild.py`，合成 PYZ，5 个条目）：一份**独立实现**的重建
+**证据**（`Torikago/tools/probe_pyz_rebuild.py`，合成 PYZ，5 个条目）：一份**独立实现**的重建
 与 Nanodesu 自己的 `rewrite_pyz` 对比 ——
 
 ```
