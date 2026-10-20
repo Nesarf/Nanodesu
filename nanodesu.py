@@ -1218,7 +1218,18 @@ def cmd_build(root: str, args) -> int:
     # pkg_len includes the 88-byte cookie itself; leave it out and reading the file
     # back lands exactly 88 bytes away from where it should.
     pkg_len = len(pkg_body) + COOKIE_LEN
-    pylib = args.pylib or _guess_pylib(root)
+    # **The manifest knows which DLL this archive needs; guessing does not.** `_guess_pylib` searches the tree
+    # and falls back to a hard-coded 312 when it finds nothing, which is how a rebuild of a Python 3.14 archive
+    # came out asking for `python312.dll` -- a file that archive does not contain, so the bootloader loaded and
+    # Python never started. Measured: pyver 314 and pylib `python314.dll` in the original, 312 and
+    # `python312.dll` in the rebuild.
+    manifest_pylib = None
+    if not args.pylib and manifest_path.is_file():
+        try:
+            manifest_pylib = json.loads(manifest_path.read_text(encoding="utf-8")).get("pylib")
+        except (OSError, ValueError):
+            manifest_pylib = None
+    pylib = args.pylib or manifest_pylib or _guess_pylib(root)
     pyver = args.pyver or _guess_pyver(pylib)
     cookie = struct.pack(COOKIE_FORMAT, MAGIC, pkg_len, toc_off,
                          len(toc_blob), pyver,
