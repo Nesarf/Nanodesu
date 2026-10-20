@@ -121,6 +121,31 @@ PYC_HEADER_LEN = 16          # 3.7+ .pyc header: magic(4)+flags(4)+mtime(4)+size
 PYZ_MAGIC = b"PYZ\0"
 NULB = b"\x00"
 
+
+def extract_limits():
+    """The caps this run is subject to, **as data, because a report should say what bounded it**.
+
+    **These are not calibrated thresholds.** They are safety ceilings against a decompression bomb, chosen
+    from the shape of the problem rather than measured from a corpus -- which is why they travel as facts
+    about the run instead of as a rating with a version, the way Torikago's calibration does.
+
+    `allow_huge` is reported alongside them because `--allow-huge` lifts the byte ceilings for one run, and
+    a report that showed only the configured caps would describe a run that did not happen.
+    """
+    return {
+        "allow_huge": _allow_huge(),
+        "caps": {
+            "max_entry_bytes": MAX_ENTRY_BYTES,
+            "max_total_bytes": MAX_TOTAL_BYTES,
+            "max_output_files": MAX_OUTPUT_FILES,
+            "max_pyz_bytes": MAX_PYZ_BYTES,
+            "max_pyz_toc_bytes": MAX_PYZ_TOC_BYTES,
+            "max_pyz_records": MAX_PYZ_RECORDS,
+        },
+        "note": "the caps as configured; `--allow-huge` lifts the byte ceilings for one run, and "
+                "`allow_huge` above says whether it was on",
+    }
+
 # These names follow PyInstaller's own header (bootloader/src/pyi_archive.h, `ARCHIVE_ITEM_*`).
 # Three of them used to disagree with it -- "x" was called a binary dependency, "z" a binary embed,
 # and "d" data -- while the values were right, so the code worked and only the reading of it was
@@ -873,6 +898,10 @@ def cmd_extract(ar: Archive, args) -> int:
         "options": ar.options,
         "internal_dir": internal_dir,
         "stub": stub_path.name,
+        # **What this extraction was bounded by.** A cap that a reader cannot see turns a limited result
+        # into an apparently complete one: the extraction reports what it wrote, so the manifest is where
+        # "what stopped me" has to live if it is to be answerable at all.
+        "limits": extract_limits(),
         # Whatever the parser found structurally wrong is carried here rather than thrown, so a
         # damaged archive still produces a usable description of itself.
         "integrity": list(getattr(ar, "integrity", []) or []),
@@ -1388,6 +1417,7 @@ def extract(target, out_dir, *, pyc=True, pyc_suffix=True, layout=False,
     stub_path = out_root / (ar.path.stem + ".stub")
     stub_path.write_bytes(stub)
     manifest["stub"] = stub_path.name
+    manifest["limits"] = extract_limits()
     write_manifest(out_root, manifest)
 
     return {
@@ -1398,6 +1428,7 @@ def extract(target, out_dir, *, pyc=True, pyc_suffix=True, layout=False,
         "confined": confined,
         "stub": stub_path.name,
         "manifest": MANIFEST_NAME,
+        "limits": extract_limits(),
         "executed": False,
     }
 
