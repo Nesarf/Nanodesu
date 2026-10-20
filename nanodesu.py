@@ -873,6 +873,13 @@ def cmd_extract(ar: Archive, args) -> int:
             "usize": e.usize, "rel": rel.as_posix(), "safe_rel": safe_rel.as_posix(),
             "confined": safe_rel.as_posix() != rel.as_posix(),
             "pyc_header": wrapped,
+            # **A symlink entry is reported, never materialised.** Its bytes are the link target, and
+            # creating a real link from an untrusted archive is a traversal primitive -- a link into a
+            # directory the operator can write elsewhere. So the target is recorded and the bytes are
+            # written as a file. Before this, nothing said the entry was a link at all: it looked like a
+            # small ordinary file, and the operator had no way to know they were holding a path.
+            "symlink_target": (blob.decode("utf-8", "replace").rstrip("\x00")
+                               if e.tcode == TC_SYMLINK else None),
         })
         dest = out_root / safe_rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -885,6 +892,15 @@ def cmd_extract(ar: Archive, args) -> int:
         if fixed:
             print("added a valid .pyc header to %d modules (Python %s)"
                   % (fixed, ar.pyver_str()))
+    # **Said out loud, because the file alone cannot say it.** A link entry leaves a small file whose
+    # contents are a path; without this line the operator would have to read the manifest to learn that.
+    links = [m for m in manifest if m.get("symlink_target")]
+    if links:
+        print("%d symlink entr(y/ies) were written as their target text, not as links -- a link from an"
+              % len(links))
+        print("  untrusted archive is a traversal primitive, so the target is recorded and never followed:")
+        for m in links[:5]:
+            print("    %s -> %s" % (m["name"], m["symlink_target"]))
     with open(ar.path, "rb") as f:
         stub = f.read(ar.base_pos)
     stub_path = out_root / (ar.path.stem + ".stub")
@@ -1391,7 +1407,11 @@ def extract(target, out_dir, *, pyc=True, pyc_suffix=True, layout=False,
         written.append({"name": e.name, "path": safe_rel.as_posix(), "size": len(blob),
                         "pyc_header": header,
                         # the entry this came from, kept alongside rather than re-paired later
-                        "tcode": e.tcode, "cmprs": e.cmprs, "usize": e.usize})
+                        "tcode": e.tcode, "cmprs": e.cmprs, "usize": e.usize,
+                        # Same rule as the command: reported, never materialised. The library result is
+                        # what a caller reads, so a link that stayed a file has to be visible there too.
+                        "symlink_target": (blob.decode("utf-8", "replace").rstrip("\x00")
+                                           if e.tcode == TC_SYMLINK else None)})
 
     # The manifest is built from what was actually written, in the archive's order, so a
     # repack cannot disagree with the extraction -- the class of bug that made a second pass
@@ -1408,7 +1428,11 @@ def extract(target, out_dir, *, pyc=True, pyc_suffix=True, layout=False,
         "integrity": list(ar.integrity),
         "entries": [{"name": w["name"], "tcode": w["tcode"], "cmprs": w["cmprs"],
                      "usize": w["usize"], "rel": w["path"], "safe_rel": w["path"],
-                     "confined": False, "pyc_header": w["pyc_header"]}
+                     "confined": False, "pyc_header": w["pyc_header"],
+                     # **This rebuild is a whitelist, so a new field has to be named here too.** Measured:
+                     # the first version of the symlink change was invisible through the library for
+                     # exactly this reason, and the command path looked fine.
+                     "symlink_target": w.get("symlink_target")}
                     for w in written],
     }
 
