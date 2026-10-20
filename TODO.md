@@ -192,7 +192,7 @@
 | # | 状态 | 项 |
 |---|---|---|
 | **A-1** | `[x]` | 人格设计已按 2026-10-06 定稿重建：`SOURCE_DESIGN_LILITH_2026-10-06.md`（只读来源）→ `CHARACTER_BLANCROSE.md` → `PERSONA_BLANCROSE.md` + `PERSONA.nsfw.md`。旧的 `CHARACTER_LILITH.md` / `PERSONA.md` **已标过时**（基于被取代的参考图）。13 条文案 · 4 处接线 |
-| **A-2** | `[ ]` | **覆盖哑路径**：`build` / `verify` / `neutralize` / `pyz` / `search` 现在不说话 |
+| **A-2** | `[ ]` | **覆盖哑路径**：`build` / `verify` / `neutralize` / `pyz` / `search` 现在不说话 | **实测（2026-10-18，做 A-4 时顺带量的）**：`say()` 在整份文件里**只有一个调用点**（`nothing_to_do`），而 `PROSE` 有 **10 条**、`NSFW_PROSE` 有 4 条 —— **也就是说 9 条台词从没被调用过，是死代码**。所以这条的原文写轻了：不是「五个命令不说话」，是**文案已经写好而接线只做了一处**。要做的三件事：① 把适用的 key 接到对应命令（`unpacking` → extract、`repacking` → build、`verified` → verify 成功、`nothing_found` → search 无结果、`cannot_tell` → 无法判断）；② NSFW 那四拍（`probing` / `pressed` / `dissolved` / `handed_over`）要么接进 extract 的四个阶段、**要么删掉**——留着不被调用的成人向文案，比没有更糟；③ `boundary_voice` 用的是 `say` 作为参数，与这张表**不是一套**，别混。**加接线时 A-4 的守卫会盯着**：机器产物里不许出现任何一条。 |
 | **A-4** | `[x]` | **给"语气不进机器可读输出"加测试** | **已做（1.7.5）**：`test_voice_not_in_machine_output.py`，两条断言 —— 机器产物里不出现任何人格文案（三档寄存器都跑一遍），以及 `say()` 真的在返回表里的句子（否则前一条会因为 `say` 坏掉而通过）。**而做的时候它抓到两件真事**：① manifest 有**两处写入**（`cmd_extract` 与 API `extract`），覆盖一侧不覆盖另一侧 —— 现已合并成 `write_manifest()` 一个函数，一次注入即可覆盖两条路径；② 测试的断言原本在第一个失败处就中断，把「一条泄漏」报成「只有一个产物受影响」，现已改成**收集全部泄漏再一次断言**。原描述： **这条在四个文档里被声明，零处被验证。** `test_voice_wiring.py` 断言了码位 / 可达 / `--plain` / 分级依据证据，**唯独没断言这条**——与 1.7.0 修过的那类缺口同一个形状（部件齐全但没接线）。 |
 
 **已具备的（勿重做）**：`boundary_voice.py`（137 行）· 三档寄存器 · `--plain` 开关 ·
