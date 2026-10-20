@@ -240,6 +240,28 @@ class TestTheWindowIsWired(unittest.TestCase):
         self.assertEqual(kwargs["title"], "NANODESU")
         self.assertTrue(callable(kwargs["draw_fn"]))
 
+    def test_a_missing_image_library_prints_the_report_instead(self):
+        """**Measured, not assumed.** Without the `window` extra the call raised `ModuleNotFoundError`
+        straight out of the flag, so somebody who asked for a window got a traceback and no report --
+        and the report is the part that matters, because the base install has no dependencies on purpose.
+        """
+        import contextlib
+        import io
+        import unittest.mock as mock
+
+        def fake_run(_ar, _args):
+            print("the report")
+            return 3
+
+        with mock.patch.object(pw, "open_window",
+                               side_effect=ModuleNotFoundError("No module named 'PIL'")):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = nano._run_in_window(fake_run, None, None)
+        self.assertEqual(rc, 3, "the command's own exit code survives a window failure")
+        self.assertIn("No module named", buf.getvalue())
+        self.assertIn("the report", buf.getvalue())
+
     def test_an_unreadable_panel_prints_instead_of_raising(self):
         import unittest.mock as mock
 

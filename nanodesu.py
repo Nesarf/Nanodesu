@@ -90,7 +90,7 @@ def _version() -> str:
 
 
 # Kept only for the by-path case. When the package is installed this value is not used.
-_SOURCE_VERSION = "1.7.4"
+_SOURCE_VERSION = "1.7.5"
 VERSION = _version()
 
 PKG_HEADER_LEN = 88          # PKG header size (one cookie length)
@@ -1814,7 +1814,18 @@ def _run_in_window(run, ar, args):
         for line in lines:
             print(line)
         return rc
-    panel_window.open_window(layout, lines, title="NANODESU", draw_fn=draw)
+    try:
+        panel_window.open_window(layout, lines, title="NANODESU", draw_fn=draw)
+    except Exception as exc:                                   # noqa: BLE001
+        # **A missing image library is a deployment fact, not a crash.** The base install has no
+        # dependencies on purpose, so `pip install nanodesu` without the `window` extra is a supported way
+        # to be -- and the report is still the deliverable. Measured before this branch existed: the call
+        # raised ModuleNotFoundError straight out of the flag, so somebody who asked for a window got a
+        # traceback and no report. The window is the extra; the analysis is the tool.
+        print("cannot open the window: %s" % exc)
+        print("printing instead:\n")
+        for line in lines:
+            print(line)
     return rc
 
 
