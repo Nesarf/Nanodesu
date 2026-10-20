@@ -55,16 +55,63 @@ jobs:
           echo "tag=$tag declared=$declared"
           test "$tag" = "$declared" || { echo "::error::tag $tag does not match version $declared"; exit 1; }
 
+      - name: The suite must pass before anything is published
+        # The tests workflow runs on every push, but a tag can be pushed at a commit whose run was
+        # red, skipped, or never made. This reads the result rather than assuming it.
+        run: python -m unittest discover -s test
+
       - name: Build
         run: python -m build
 
       - name: Validate the distributions
         run: python -m twine check dist/*
 
-      - name: List what is actually in the wheel
+      - name: List what is actually in the wheel, and refuse a missing part
         # A build that succeeds says nothing about its contents: a release once shipped without a
-        # module it needed, and every check passed. Printing the file list costs nothing.
-        run: python -c "import glob,zipfile;[print(n) for w in glob.glob('dist/*.whl') for n in zipfile.ZipFile(w).namelist()]"
+        # module it needed, and every check passed. Printing the list costs nothing -- but printing it
+        # was all this step did, so a missing file went out anyway. It asserts now, and it names the
+        # window's three parts, which are the newest thing that can go missing: the module, and the
+        # two JSON files that travel as `data-files` under `<prefix>/share/nanodesu` with the version
+        # in the path (matched by suffix so this does not pin the version).
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          names = set()
+          for wheel in sorted(glob.glob("dist/*.whl")):
+              print(wheel)
+              for name in zipfile.ZipFile(wheel).namelist():
+                  print("   ", name)
+                  names.add(name)
+          required = {"nanodesu.py", "neutralize.py", "boundary.py",
+                      "boundary_voice.py", "panel_window.py"}
+          missing = sorted(required - names)
+          for wanted in ("share/nanodesu/panel.json", "share/nanodesu/font.json"):
+              if not any(n.endswith(wanted) for n in names):
+                  missing.append(wanted)
+          if missing:
+              raise SystemExit("the wheel is missing %s" % missing)
+          print("every required entry is present")
+          PY
+
+      - name: The installed wheel can paint its own panel
+        # The branch nobody exercises by developing from a clone: `embedded()` looks beside the module
+        # first and then in `<prefix>/share/nanodesu`, and only the second one exists after
+        # `pip install`. Installed from a directory that is not the checkout, because a path relative
+        # to the working directory passes here and fails for every user.
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/python -m pip install --quiet dist/*.whl Pillow
+          cd /tmp
+          /tmp/verify/bin/python - <<'PY'
+          import pathlib, sysconfig
+          import panel_window as pw
+          share = pathlib.Path(sysconfig.get_path("data")) / "share" / "nanodesu"
+          layout = pw.load(str(share / "panel.json"))
+          draw = pw.load_font(str(share / "font.json"))
+          image = layout.image(["the installed copy paints its own panel"], title="RELEASE", draw_fn=draw)
+          assert image.size[0] > 0 and image.size[1] > 0, image.size
+          print("painted %s from %s" % (image.size, share))
+          PY
 
       - name: Is this version already on PyPI?
         # PyPI refuses to overwrite a published file, which is correct of it and is what makes a
@@ -124,11 +171,32 @@ jobs:
         run: python -m pip install --upgrade pyinstaller
 
       - name: Build the onefile executable
-        run: python -m PyInstaller --onefile --name nanodesu --console nanodesu.py
+        # `--add-data` is not decoration: a onefile build carries its modules and not the files beside
+        # them, so without these two the window's data would be missing from this artifact while
+        # working perfectly from a checkout. Both land inside the bundle, which is where `embedded()`
+        # looks first (`dirname(__file__)` is the bundle root in a onefile build).
+        run: >
+          python -m PyInstaller --onefile --name nanodesu --console
+          --add-data "panel.json;." --add-data "font.json;."
+          nanodesu.py
 
       - name: Sanity-check that it runs
         # An executable that cannot print its own help is not a release artifact.
         run: .\dist\nanodesu.exe --help
+
+      - name: The window's data has to be inside the executable
+        # `--help` passes whether or not these two files are in the bundle, so it cannot see this. What
+        # a missing pair does is quieter than a crash: `--window` falls back to printing the report,
+        # which is the designed degradation and also indistinguishable from a user who asked for a
+        # window and got one that never opened.
+        run: |
+          $listing = pyi-archive_viewer -l dist\nanodesu.exe | Out-String
+          foreach ($name in @("panel.json", "font.json")) {
+            if ($listing -notmatch [regex]::Escape($name)) {
+              throw "$name is not inside nanodesu.exe; --window would print instead of painting"
+            }
+            Write-Output "$name is inside the executable"
+          }
 
       - name: Attach it to the release
         env:

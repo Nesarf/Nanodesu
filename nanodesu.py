@@ -1980,12 +1980,11 @@ def main(argv=None):
         if not is_plain():
             print("\n" + say("nothing_to_do"))
         return 0
-    if args.cmd == "pyz":
-        return cmd_pyz(args.target, args)
-    if args.cmd == "neutralize":
-        return cmd_neutralize(args.target, args)
-    if args.cmd == "build":
-        return cmd_build(args.target, args)
+    # **Checked before any command runs, and the position is the point.** This refusal used to sit
+    # *below* the three early dispatches at the end of this function, so `pyz`, `neutralize` and
+    # `build` returned before it and kept accepting `--window` and dropping it -- the exact defect the
+    # refusal was written to end, still live on three of the commands. Measured on the installed
+    # wheel: `neutralize --window <missing file>` answered "not found" rather than refusing the flag.
     if getattr(args, "window", False) and args.cmd not in WINDOW_COMMANDS:
         # **Refused rather than ignored.** The flag used to be accepted on every command and silently
         # dropped where it meant nothing, so `extract --window` exited 0 having opened nothing -- a
@@ -1994,6 +1993,12 @@ def main(argv=None):
         print("--window shows a report, and %r does not produce one; it is available for %s"
               % (args.cmd, ", ".join(WINDOW_COMMANDS)), file=sys.stderr)
         return 2
+    if args.cmd == "pyz":
+        return cmd_pyz(args.target, args)
+    if args.cmd == "neutralize":
+        return cmd_neutralize(args.target, args)
+    if args.cmd == "build":
+        return cmd_build(args.target, args)
     ar = find_archive(args.target)
     run = {
         "info": cmd_info, "ls": cmd_ls, "tree": cmd_tree, "search": cmd_search,

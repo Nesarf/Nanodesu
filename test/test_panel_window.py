@@ -214,6 +214,28 @@ class TestTheFlagIsNotAcceptedAndIgnored(unittest.TestCase):
                 self.assertIn("does not produce one", err.getvalue())
                 self.assertIn("info, ls, tree, verify", err.getvalue())
 
+    def test_the_commands_that_return_early_refuse_it_too(self):
+        """**The refusal has to sit above the early dispatch, and it did not.**
+
+        `pyz`, `neutralize` and `build` return straight out of `main` before any report exists, so a
+        check placed below them never ran for those three commands: `neutralize --window <missing>`
+        answered "not found" about the file rather than refusing the flag, which is the same
+        accepted-and-ignored shape the refusal was written to end. Found on the installed wheel.
+        """
+        import contextlib
+        import io
+        for argv in (["pyz", "nowhere.exe", "--window"],
+                     ["neutralize", "nowhere.exe", "--window"],
+                     ["build", "nowhere.exe", "-o", "out", "--window"]):
+            with self.subTest(argv=argv):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    rc = nano.main(argv)
+                self.assertEqual(rc, 2)
+                self.assertIn("does not produce one", err.getvalue())
+                # The file is never opened: this is a refusal, not a failure to find it.
+                self.assertNotIn("not found", err.getvalue())
+
     def test_the_reporting_commands_are_the_ones_named(self):
         self.assertEqual(nano.WINDOW_COMMANDS, ("info", "ls", "tree", "verify"))
 
