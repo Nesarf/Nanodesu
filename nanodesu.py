@@ -764,6 +764,23 @@ def cmd_cat(ar: Archive, args) -> int:
     return 0
 
 
+MANIFEST_NAME = "_archive_manifest.json"
+
+
+def write_manifest(out_root, body):
+    """Write the extraction manifest. **One writer, because there were two.**
+
+    The command and the library each serialised this file themselves -- same name, same arguments, two
+    implementations. Measured while adding the test for what may not reach a machine-readable output: a
+    persona line injected into one writer was invisible to a test that only exercised the other, which is
+    exactly how a duplicated implementation drifts. One function means one place to change and one place to
+    check.
+    """
+    path = out_root / MANIFEST_NAME
+    path.write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
+    return path
+
+
 def cmd_extract(ar: Archive, args) -> int:
     out_root = Path(args.output)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -849,8 +866,7 @@ def cmd_extract(ar: Archive, args) -> int:
         "integrity": list(getattr(ar, "integrity", []) or []),
         "entries": manifest,
     }
-    (out_root / "_archive_manifest.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    write_manifest(out_root, meta)
     print("\nextracted %d files (%d failed) -> %s" % (ok, fail, out_root))
     if confined:
         # Said out loud, not folded away: an archive that tried to address files outside the
@@ -1036,7 +1052,7 @@ def cmd_build(root: str, args) -> int:
     stub = stubs[0].read_bytes()
 
     files = []
-    manifest_path = root / "_archive_manifest.json"
+    manifest_path = root / MANIFEST_NAME
     if manifest_path.is_file():
         meta = json.loads(manifest_path.read_text(encoding="utf-8"))
         missing = 0
@@ -1087,7 +1103,7 @@ def cmd_build(root: str, args) -> int:
         for fp in sorted(root.rglob("*")):
             if not fp.is_file() or fp.suffix == ".stub":
                 continue
-            if fp.name == "_archive_manifest.json":
+            if fp.name == MANIFEST_NAME:
                 continue
             rel = fp.relative_to(root).as_posix()
             if rel.startswith("_internal/"):
@@ -1351,8 +1367,7 @@ def extract(target, out_dir, *, pyc=True, pyc_suffix=True, layout=False,
     stub_path = out_root / (ar.path.stem + ".stub")
     stub_path.write_bytes(stub)
     manifest["stub"] = stub_path.name
-    (out_root / "_archive_manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    write_manifest(out_root, manifest)
 
     return {
         "ok": not failed,
@@ -1361,7 +1376,7 @@ def extract(target, out_dir, *, pyc=True, pyc_suffix=True, layout=False,
         "failed": failed,
         "confined": confined,
         "stub": stub_path.name,
-        "manifest": "_archive_manifest.json",
+        "manifest": MANIFEST_NAME,
         "executed": False,
     }
 
