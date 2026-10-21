@@ -63,6 +63,20 @@ jobs:
       - name: Build
         run: python -m build
 
+      - name: The sdist can run its own suite
+        # **The gate that was missing.** 1.7.5 shipped an sdist carrying `test/test_*.py` and not
+        # `test/spawn_guard.py`, `FORMAT_MATRIX.md` or `PERSONA.md`: unpacked and run, eight modules failed
+        # at import and three tests errored -- while the same suite was green above, because the checkout
+        # **is** the repository.
+        #
+        # `mktemp` rather than a fixed path: a directory left by an earlier run would let this pass on
+        # files that are no longer the ones in `dist/`.
+        run: |
+          tmp=$(mktemp -d)
+          tar -xzf dist/*.tar.gz -C "$tmp"
+          cd "$tmp"/*/
+          python -m unittest discover -s test
+
       - name: Validate the distributions
         run: python -m twine check dist/*
 
