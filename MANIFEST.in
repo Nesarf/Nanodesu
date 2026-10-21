@@ -1,0 +1,17 @@
+# What the sdist carries.
+#
+# **The test suite is shipped, so it has to be shippable.** The published 1.7.5 sdist held
+# `test/test_*.py` and nothing else from that directory: no `spawn_guard.py`, so eight modules failed at
+# import, and no `FORMAT_MATRIX.md`, so three more tests errored on a missing file. Measured by
+# unpacking the published sdist and running its suite on Linux.
+#
+# `PERSONA.md` is here for the same reason a second time: `test_voice_wiring` compares a sentence in the
+# document with the same sentence in the code, which is the check that keeps the two from drifting. An
+# sdist without the document cannot run the test that guards it.
+include LICENSE
+include README.md
+include FORMAT_MATRIX.md
+include PERSONA.md
+recursive-include test *.py
+recursive-include tools *.py
+recursive-include tools *.md
