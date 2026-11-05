@@ -20,6 +20,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.9", "3.12", "3.13", "3.14"]
+        exclude:
+          # `ubuntu-latest` moved to Ubuntu 26.04, and actions/setup-python has no 3.9 build for it: the job
+          # died in setup before a test ran. 3.9 is still covered on Windows.
+          - os: ubuntu-latest
+            python-version: "3.9"
 
     steps:
       # Actions are pinned to a commit SHA rather than a tag. A tag is a movable pointer: if
